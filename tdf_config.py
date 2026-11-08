@@ -55,17 +55,27 @@ V_BARS = 6
 COST_PCT_PER_SIDE = 0.02        # % of price per side (commission + slippage), as in earlier backtests
 SPLIT_DATE = "2025-01-01"       # results before / after this date are reported separately
 WORKERS = 4
+FOCUS_MIN_TRADES = 150          # the detailed sections use the run with the best avg R among runs with this many trades
 
 # ----------------------------------------------------------------- variants (each = the core rules with some settings changed)
 # SKIP_CHECKS removes checklist rows at the MSS (2 = premium / discount, 3 = who is in control, 4 = ATF trend).
 SKIP_CHECKS = set()
+T1_MODE = "nearest pool"        # "nearest pool" (as in the Pine file) or "daily target" (the next daily-scale pool)
 RUNS = {
     "core": {},
-    "control on a 1H CHoCH": {"CTRL_NEEDS": "CHoCH or MSS"},
-    "without check 3 (control)": {"SKIP_CHECKS": {3}},
-    "without check 2 (premium / discount)": {"SKIP_CHECKS": {2}},
-    "Target 1 at least 1.5R": {"MIN_RR": 1.5},
-    "fill at 50% of the gap": {"FILL_AT": "50% of the gap"},
-    "displacement 0.7 ATR": {"DISP_MULT": 0.7},
-    "relaxed: without checks 2 and 3, T1 1.5R": {"SKIP_CHECKS": {2, 3}, "MIN_RR": 1.5},
+    # ---- ladder: each step keeps the previous changes
+    "L1: checks 3 and 4 graded only": {"SKIP_CHECKS": {3, 4}},
+    "L2: L1 + T1 = daily target": {"SKIP_CHECKS": {3, 4}, "T1_MODE": "daily target"},
+    "L3: L2 + fill at 50% of the gap": {"SKIP_CHECKS": {3, 4}, "T1_MODE": "daily target", "FILL_AT": "50% of the gap"},
+    "L4: L3 + window to 15:00": {"SKIP_CHECKS": {3, 4}, "T1_MODE": "daily target", "FILL_AT": "50% of the gap",
+                                 "WINDOW": (570, 900)},
+    "L5: L4 + displacement 0.7 ATR": {"SKIP_CHECKS": {3, 4}, "T1_MODE": "daily target", "FILL_AT": "50% of the gap",
+                                      "WINDOW": (570, 900), "DISP_MULT": 0.7},
+    "L6: L5 + T1 at least 1.5R": {"SKIP_CHECKS": {3, 4}, "T1_MODE": "daily target", "FILL_AT": "50% of the gap",
+                                  "WINDOW": (570, 900), "DISP_MULT": 0.7, "MIN_RR": 1.5},
+    # ---- single changes from the core
+    "only: T1 = daily target": {"T1_MODE": "daily target"},
+    "only: fill at the far edge": {"FILL_AT": "Far edge"},
+    "only: window to 15:00": {"WINDOW": (570, 900)},
+    "only: displacement 0.7 ATR": {"DISP_MULT": 0.7},
 }

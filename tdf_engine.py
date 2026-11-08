@@ -382,6 +382,7 @@ def run_symbol(df, symbol, group):
              fTop=NAN, fBot=NAN, ent=NAN, stp=NAN, rsk=NAN, tg1=NAN, tg2=NAN, mssBar=0, t1=False, rr=0.0,
              trades=0, losses=0, choch=False, mssT=None, fillT=None, vshape=False, dbl=False, bias=0, ctrl=0, atf=False)
     trades = []
+    mlog = []
     fun = dict(poi=0, sweep=0, choch=0, mss=0, order=0, fill=0, poi_failed=0, window_closed=0, not_filled=0)
     for c in range(1, 12):
         fun["fail_%d" % c] = 0
@@ -573,8 +574,15 @@ def run_symbol(df, symbol, group):
                         if abs(ent - stp) < minRisk:
                             stp = ent - minRisk if lg else ent + minRisk
                         rsk = abs(ent - stp)
-                        tg1 = nearest_pool(max(S["legX"], ent) if lg else min(S["legX"], ent), lg)
-                        tg2 = NAN if isnan(tg1) else final_pool(tg1, lg)
+                        base = max(S["legX"], ent) if lg else min(S["legX"], ent)
+                        near = nearest_pool(base, lg)
+                        daily = final_pool(base, lg)
+                        if C.T1_MODE == "daily target":
+                            tg1 = daily
+                            tg2 = NAN if isnan(tg1) else final_pool(tg1, lg)
+                        else:
+                            tg1 = near
+                            tg2 = NAN if isnan(tg1) else final_pool(tg1, lg)
                         rr = 0.0 if (isnan(tg1) or rsk <= 0) else abs(tg1 - ent) / rsk
                         opp = (not isnan(tg1)) and (zone_opp(eA, lg, ent, tg1) or zone_opp(eB, lg, ent, tg1) or sr_opp(lg, ent, tg1))
                         checks = {1: bias == S["sd"], 2: (ent < eq) if lg else (ent > eq), 3: ctrl == S["sd"],
@@ -583,6 +591,24 @@ def run_symbol(df, symbol, group):
                         fails = [c for c, ok in checks.items() if not ok and c not in C.SKIP_CHECKS]
                         for c in fails:
                             fun["fail_%d" % c] += 1
+                        # ---- diagnostics: every MSS, with the numbers each fill level and target would give
+                        def _rr(e_, t_):
+                            r_ = abs(e_ - stp_at(e_)) if not isnan(e_) else NAN
+                            return round(abs(t_ - e_) / r_, 2) if not (isnan(t_) or isnan(r_) or r_ <= 0) else None
+
+                        def stp_at(e_):
+                            s_ = S["swX"] - C.STOP_BUF * a5 if lg else S["swX"] + C.STOP_BUF * a5
+                            mr = C.MIN_STOP_PCT / 100 * e_
+                            return (e_ - mr if lg else e_ + mr) if abs(e_ - s_) < mr else s_
+                        eNear, eMid, eFar = (fT if lg else fB_), (fT + fB_) / 2, (fB_ if lg else fT)
+                        mlog.append(dict(symbol=symbol, time=str(T[i]), side="long" if lg else "short", poi=S["poi"],
+                                         risk_pct=round(100 * rsk / ent, 3), gap_atr=round((fT - fB_) / a5, 2),
+                                         leg_body_atr=round(S["legBody"] / a5, 2), bars_from_sweep=i - S["swBar"],
+                                         rr_t1=round(rr, 2), opposing_zone=opp,
+                                         rr_near_pool=_rr(eNear, near), rr_mid_pool=_rr(eMid, near), rr_far_pool=_rr(eFar, near),
+                                         rr_near_daily=_rr(eNear, daily), rr_mid_daily=_rr(eMid, daily), rr_far_daily=_rr(eFar, daily),
+                                         c1=checks[1], c2=checks[2], c3=checks[3], c4=checks[4], c6=checks[6], c11=checks[11],
+                                         bias=bias, ctrl=ctrl, atf_a=eA.trend, atf_b=eB.trend, ordered=not fails))
                         if not fails:
                             fun["order"] += 1
                             S.update(st=3, ent=ent, stp=stp, rsk=rsk, tg1=tg1, tg2=tg2, rr=rr, mssBar=i, mssT=T[i],
@@ -632,7 +658,7 @@ def run_symbol(df, symbol, group):
                 liqs.pop(q)
         cph[:] = [p for p in cph if not h > p]
         cpl[:] = [p for p in cpl if not l < p]
-    return trades, fun
+    return trades, fun, mlog
 
 
 def _close(trades, S, symbol, group, r, why, t):

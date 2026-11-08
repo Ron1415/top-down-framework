@@ -48,7 +48,7 @@ def synthetic(sym, days, seed):
     return pd.DataFrame({"open": opn, "high": hi, "low": lo, "close": close, "volume": 1e5}, index=pd.DatetimeIndex(times))
 
 
-DEFAULTS = {k: getattr(C, k) for k in ("CTRL_NEEDS", "SKIP_CHECKS", "MIN_RR", "FILL_AT", "DISP_MULT")}
+DEFAULTS = {k: getattr(C, k) for k in ("CTRL_NEEDS", "SKIP_CHECKS", "MIN_RR", "FILL_AT", "DISP_MULT", "WINDOW", "T1_MODE")}
 
 
 def work(job):
@@ -58,9 +58,9 @@ def work(job):
     for k, v in C.RUNS[run].items():
         setattr(C, k, v)
     if df is None or len(df) < 2000:
-        return run, sym, [], None, 0
-    trades, fun = E.run_symbol(df, sym, "")
-    return run, sym, trades, fun, df.index.normalize().nunique()
+        return run, sym, [], None, 0, []
+    trades, fun, mlog = E.run_symbol(df, sym, "")
+    return run, sym, trades, fun, df.index.normalize().nunique(), mlog
 
 
 def table(rows, cols):
@@ -100,9 +100,12 @@ def main():
     with Pool(C.WORKERS) as p:
         res = p.map(work, [(run, s, df) for run in C.RUNS for s, df in jobs])
     by_run = {run: {} for run in C.RUNS}
-    for run, s, t, f, nd in res:
+    mrows = []
+    for run, s, t, f, nd, ml in res:
         by_run[run][s] = (t, f, nd)
+        mrows += [dict(m, run=run) for m in ml]
     by_sym = by_run["core"]
+    mss = pd.DataFrame(mrows)
 
     # ---- trades table (a symbol in two groups is counted in both)
     rows = []
@@ -112,8 +115,16 @@ def main():
                 for t in by_run[run].get(s, ([], None, 0))[0]:
                     rows.append(dict(t, group=g, run=run))
     allt = pd.DataFrame(rows)
-    tr = allt[allt["run"] == "core"].copy() if len(allt) else allt
+    # the run the detailed sections describe: best avg R among runs with enough trades (chosen after seeing results)
+    focus = "core"
+    if len(allt):
+        cnt = allt.groupby("run")["r_net"].agg(["count", "mean"])
+        ok = cnt[cnt["count"] >= C.FOCUS_MIN_TRADES]
+        focus = ok["mean"].idxmax() if len(ok) else cnt["count"].idxmax()
+    tr = allt[allt["run"] == focus].copy() if len(allt) else allt
     os.makedirs("results", exist_ok=True)
+    if len(mss):
+        mss.to_csv("results/mss_log.csv.gz", index=False, compression="gzip")
     if len(tr):
         tr = tr.sort_values("exit_time")
     if len(allt):
@@ -135,6 +146,8 @@ def main():
 
     summ = {"run": now, "synthetic": a.synthetic, "groups": {}, "symbols": {}}
     grows = []
+    md.append(f"**Detailed sections 1 and 3-6 describe the run \"{focus}\"**, picked as the best average among runs with at least "
+              f"{C.FOCUS_MIN_TRADES} trades. Picking the best of several runs flatters it, so treat its numbers as an upper bound.\n")
     for g, syms in groups.items():
         sub = tr[tr["group"] == g] if len(tr) else pd.DataFrame()
         sessions = sum(by_sym.get(s, ([], None, 0))[2] for s in syms)
@@ -151,13 +164,13 @@ def main():
         grows.append(row)
         summ["groups"][g] = row
     ranked = sorted(grows, key=lambda r: (r["avg_r"] is None, -(r["avg_r"] or 0)))
-    md.append("## 1. Groups, best first (core rules)\n")
+    md.append(f"## 1. Groups, best first ({focus})\n")
     md.append(table(ranked, ["group", "trades", "trades_per_month", "win_pct", "avg_r", "avg_r_gross", "total_r", "pf",
                              "max_dd_r", "t", "avg_r_before_split", "avg_r_after_split", "avg_r_last_6m"]))
     md.append(f"\nSplit date {C.SPLIT_DATE}. A group is worth trading only if avg_r is positive net of costs, t is about 2 "
               "or more, and both halves and the last 6 months are positive.\n")
 
-    md.append("## 2. Variants: the same test with one rule changed (avg R net, trades)\n")
+    md.append("## 2. All runs: avg R net (trades, t)\n")
     vrows = []
     for run in C.RUNS:
         sub = allt[allt["run"] == run] if len(allt) else pd.DataFrame()
@@ -172,7 +185,7 @@ def main():
     md.append("\nThe core rules are the framework as written. A variant that does much better in every group points to "
               "a rule that is too strict; check it in both halves before adopting it.\n")
 
-    md.append("## 3. Symbols (core)\n")
+    md.append(f"## 3. Symbols ({focus})\n")
     srows = []
     for g, syms in groups.items():
         for s in syms:
@@ -186,7 +199,7 @@ def main():
     md.append(table(srows, ["group", "symbol", "trades", "win_pct", "avg_r", "total_r", "pf", "max_dd_r", "t"]))
 
     if len(tr):
-        md.append("\n## 4. By year, core (avg R net, trades)\n")
+        md.append(f"\n## 4. By year, {focus} (avg R net, trades)\n")
         tr["year"] = tr["date"].str[:4]
         yrows = []
         for g in groups:
@@ -195,7 +208,7 @@ def main():
                 r[y] = f"{sub['r_net'].mean():+.2f} ({len(sub)})"
             yrows.append(r)
         md.append(table(yrows, ["group"] + sorted(tr["year"].unique())))
-        md.append("\n## 5. Long vs short, and the optional confluences, core (avg R net, trades)\n")
+        md.append(f"\n## 5. Long vs short, and the optional confluences, {focus} (avg R net, trades)\n")
         crows = []
         for g in groups:
             sub = tr[tr["group"] == g]
@@ -204,7 +217,7 @@ def main():
                               v_shape=f(sub[sub.v_shape]), no_v_shape=f(sub[~sub.v_shape]),
                               double_sweep=f(sub[sub.double_sweep]), t1_hit_pct=round(100 * sub.t1_hit.mean(), 1) if len(sub) else None))
         md.append(table(crows, ["group", "long", "short", "v_shape", "no_v_shape", "double_sweep", "t1_hit_pct"]))
-        md.append("\n## 6. Exits, core (share of trades)\n")
+        md.append(f"\n## 6. Exits, {focus} (share of trades)\n")
         erows = []
         for g in groups:
             sub = tr[tr["group"] == g]
@@ -221,6 +234,23 @@ def main():
         md.append("Checks that blocked an MSS (one MSS can fail several): " + ", ".join(
             f"check {c}: {tot.get('fail_%d' % c, 0)}" for c in (1, 2, 3, 4, 6, 11)) + ".\n")
         summ["funnel"] = tot
+    # ---- 8. MSS diagnostics (core): what each MSS would have offered
+    md.append("\n## 8. MSS diagnostics, core (every MSS, all symbols)\n")
+    core_m = mss[mss["run"] == "core"] if len(mss) else pd.DataFrame()
+    if len(core_m):
+        med = lambda c: round(float(core_m[c].dropna().median()), 2) if core_m[c].notna().any() else None
+        share = lambda c, x: round(100 * (core_m[c].dropna() >= x).mean(), 1) if core_m[c].notna().any() else None
+        md.append(f"MSS: {len(core_m)}. Median risk {med('risk_pct'):.2f}% of price; median gap {med('gap_atr'):.2f} ATR; "
+                  f"median strongest body {med('leg_body_atr'):.2f} ATR; median {med('bars_from_sweep'):.0f} bars from the sweep. "
+                  f"A fresh opposing zone sat before T1 in {round(100 * core_m['opposing_zone'].mean(), 1)}%.\n")
+        drows = []
+        for lbl, cn in (("near edge", "near"), ("50% of the gap", "mid"), ("far edge", "far")):
+            drows.append({"fill": lbl, "median R to nearest pool": med(f"rr_{cn}_pool"), "share >= 2R (nearest pool)": share(f"rr_{cn}_pool", 2),
+                          "median R to daily target": med(f"rr_{cn}_daily"), "share >= 2R (daily target)": share(f"rr_{cn}_daily", 2)})
+        md.append(table(drows, ["fill", "median R to nearest pool", "share >= 2R (nearest pool)", "median R to daily target", "share >= 2R (daily target)"]))
+        pr = {f"check {c}": round(100 * core_m[f"c{c}"].mean(), 1) for c in (1, 2, 3, 4, 6, 11)}
+        md.append("\nShare of MSS passing each check (%): " + ", ".join(f"{k} {v}" for k, v in pr.items()) + ".\n")
+        md.append("Every MSS is in results/mss_log.csv.gz (all runs, with a run column).\n")
     if scores:
         md.append("\nStocks picked (20-day average dollar volume, $M): " + ", ".join(
             f"{s} {scores[s] / 1e6:,.0f}" for s in stocks) + "\n")

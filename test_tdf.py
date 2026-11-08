@@ -13,7 +13,7 @@ def test_trade_path():
     C.DISP_MULT, C.ENT_GAP, C.WINDOW = 0.4, 0.2, (570, 900)
     trades, fun = [], {}
     for k in range(10):
-        t, f = E.run_symbol(synthetic("X%d" % k, 200, 100 + k), "X%d" % k, "test")
+        t, f, _ = E.run_symbol(synthetic("X%d" % k, 200, 100 + k), "X%d" % k, "test")
         trades += t
         for a, b in f.items():
             fun[a] = fun.get(a, 0) + b
