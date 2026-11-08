@@ -1,0 +1,386 @@
+{
+ "run": "2026-11-08 19:46 UTC",
+ "synthetic": false,
+ "groups": {
+  "Stocks": {
+   "group": "Stocks",
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null,
+   "avg_r_gross": null,
+   "trades_per_month": 0.0
+  },
+  "Futures (ETF proxies)": {
+   "group": "Futures (ETF proxies)",
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null,
+   "avg_r_gross": null,
+   "trades_per_month": 0.0
+  },
+  "ETFs": {
+   "group": "ETFs",
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null,
+   "avg_r_gross": null,
+   "trades_per_month": 0.0
+  }
+ },
+ "symbols": {
+  "Stocks|MU": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|NVDA": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|AAPL": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|META": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|TSLA": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|AMD": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|MSFT": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|AMZN": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|GOOGL": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Stocks|INTC": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|SPY": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|QQQ": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|DIA": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|IWM": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|GLD": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|SLV": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|USO": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|UNG": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|FXE": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "Futures (ETF proxies)|FXY": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|SPY": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|QQQ": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|IWM": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|TLT": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|XLF": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|XLK": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|SMH": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|XLE": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|XLV": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  },
+  "ETFs|EEM": {
+   "trades": 0,
+   "win_pct": null,
+   "avg_r": null,
+   "total_r": 0.0,
+   "pf": null,
+   "max_dd_r": 0.0,
+   "t": null
+  }
+ },
+ "variants": {
+  "core": {
+   "run": "core",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "control on a 1H CHoCH": {
+   "run": "control on a 1H CHoCH",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "without check 3 (control)": {
+   "run": "without check 3 (control)",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "without check 2 (premium / discount)": {
+   "run": "without check 2 (premium / discount)",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "Target 1 at least 1.5R": {
+   "run": "Target 1 at least 1.5R",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "fill at 50% of the gap": {
+   "run": "fill at 50% of the gap",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "displacement 0.7 ATR": {
+   "run": "displacement 0.7 ATR",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  },
+  "relaxed: without checks 2 and 3, T1 1.5R": {
+   "run": "relaxed: without checks 2 and 3, T1 1.5R",
+   "Stocks": "-",
+   "Futures (ETF proxies)": "-",
+   "ETFs": "-"
+  }
+ },
+ "funnel": {
+  "poi": 6261,
+  "sweep": 1260,
+  "choch": 184,
+  "mss": 116,
+  "order": 3,
+  "fill": 0,
+  "poi_failed": 2484,
+  "window_closed": 848,
+  "not_filled": 3,
+  "fail_1": 0,
+  "fail_2": 26,
+  "fail_3": 66,
+  "fail_4": 89,
+  "fail_5": 0,
+  "fail_6": 107,
+  "fail_7": 0,
+  "fail_8": 0,
+  "fail_9": 0,
+  "fail_10": 0,
+  "fail_11": 0
+ }
+}
