@@ -79,3 +79,10 @@ RUNS = {
     "only: window to 15:00": {"WINDOW": (570, 900)},
     "only: displacement 0.7 ATR": {"DISP_MULT": 0.7},
 }
+
+# ----------------------------------------------------------------- bias-score + pullback model (bias_backtest.py)
+PB_WINDOW = (585, 900)          # entries 9:45-15:00 New York (VWAP needs 15 minutes to settle)
+PB_STOP_BUF = 0.1               # stop beyond the pullback bar and the level by 0.1 x ATR (minimum MIN_STOP_PCT)
+PB_DEFAULT = dict(threshold=60, triggers=("ema8", "vwap"), exit="2R", trend=True)   # the headline version
+PB_THRESHOLDS = (40, 50, 60, 70, 80)
+PB_TRIGGER_SETS = {"8 EMA": ("ema8",), "VWAP": ("vwap",), "21 EMA": ("ema21",), "8 EMA or VWAP": ("ema8", "vwap")}

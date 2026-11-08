@@ -54,6 +54,31 @@ def test_daily_structure():
     print("daily structure ok")
 
 
+def test_pullback_no_lookahead():
+    """On a driftless random walk the pullback model must not make money before costs."""
+    import numpy as np
+    import bias_engine as B
+    rows = []
+    for k in range(4):
+        rng = np.random.default_rng(500 + k)
+        idx = pd.bdate_range(end="2026-11-06", periods=150, tz="America/New_York")
+        times = [d + pd.Timedelta(minutes=570 + 5 * m) for d in idx for m in range(78)]
+        n = len(times)
+        c = 100 * np.exp(np.cumsum(rng.standard_t(4, n) * 0.0018))
+        o = np.r_[100, c[:-1]]
+        h = np.maximum(o, c) * (1 + np.abs(rng.normal(0, 0.0012, n)))
+        l = np.minimum(o, c) * (1 - np.abs(rng.normal(0, 0.0012, n)))
+        df = pd.DataFrame({"open": o, "high": h, "low": l, "close": c, "volume": 1e5}, index=pd.DatetimeIndex(times))
+        rows += B.run_symbol_bias(df, "R%d" % k)
+    d = pd.DataFrame(rows)
+    gross = (d["r_2R"] + d["cost_r"]).mean()
+    assert len(d) > 500 and abs(gross) < 0.12, (len(d), gross)
+    for e in B.EXITS:
+        assert d["r_" + e].min() >= -1.0 - d["cost_r"].max() - 1e-6
+    print("pullback model: %d random-walk signals, gross %.3fR (no edge, as expected)" % (len(d), gross))
+
+
 if __name__ == "__main__":
+    test_pullback_no_lookahead()
     test_daily_structure()
     test_trade_path()
