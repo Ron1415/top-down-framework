@@ -1,6 +1,6 @@
 # Top-Down Framework backtest
 
-Run 2026-11-08 20:06 UTC. 5-minute regular-session bars, about 1250 trading days requested; trades from 2022-04-08 to 2026-10-12. Results are in R, net of 0.02% per side unless marked gross. Rules and defaults are the same as Top_Down_Framework.pine.
+Run 2026-11-08 20:52 UTC. 5-minute regular-session bars, about 1250 trading days requested; trades from 2022-04-08 to 2026-10-12. Results are in R, net of 0.02% per side unless marked gross. Rules and defaults are the same as Top_Down_Framework.pine.
 
 Futures are tested through the ETFs that track them (regular session only). SPY, QQQ and IWM are in both the futures and ETF groups. The stock list is today's top 10 by dollar volume, which flatters the past (those stocks are known winners).
 
