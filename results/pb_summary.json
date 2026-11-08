@@ -1,0 +1,48 @@
+{
+ "run": "2026-11-08 21:56 UTC",
+ "synthetic": false,
+ "groups": {
+  "Stocks": {
+   "group": "Stocks",
+   "trades": 7241,
+   "win_pct": 31.9,
+   "avg_r": -0.223,
+   "total_r": -1617.8,
+   "pf": 0.72,
+   "max_dd_r": -1618.6,
+   "t": -13.87,
+   "trades_per_month": 126.0,
+   "before_split": -0.225,
+   "after_split": -0.22,
+   "last_6m": -0.253
+  },
+  "Futures (ETF proxies)": {
+   "group": "Futures (ETF proxies)",
+   "trades": 5680,
+   "win_pct": 36.1,
+   "avg_r": -0.17,
+   "total_r": -964.4,
+   "pf": 0.75,
+   "max_dd_r": -971.9,
+   "t": -9.96,
+   "trades_per_month": 98.8,
+   "before_split": -0.154,
+   "after_split": -0.191,
+   "last_6m": -0.186
+  },
+  "ETFs": {
+   "group": "ETFs",
+   "trades": 6398,
+   "win_pct": 35.5,
+   "avg_r": -0.189,
+   "total_r": -1206.5,
+   "pf": 0.74,
+   "max_dd_r": -1221.1,
+   "t": -11.5,
+   "trades_per_month": 111.3,
+   "before_split": -0.17,
+   "after_split": -0.218,
+   "last_6m": -0.187
+  }
+ }
+}
