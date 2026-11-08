@@ -1,0 +1,39 @@
+name: TDF backtest
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Trading days of 5-minute history (1250 = about 5 years)"
+        default: "1250"
+permissions:
+  contents: write
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache Alpaca bars
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: bars-${{ github.run_id }}
+          restore-keys: bars-
+      - run: pip install -r requirements.txt
+      - name: Plumbing tests
+        run: python test_tdf.py
+      - name: Backtest
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: python tdf_backtest.py --days ${{ github.event.inputs.days }}
+      - name: Save results
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add results
+          git commit -m "TDF backtest results" || echo "nothing to commit"
+          git push
