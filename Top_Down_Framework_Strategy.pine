@@ -1,0 +1,1676 @@
+//@version=6
+// STRATEGY VERSION for the TradingView Strategy Tester (Nov 8, 2026): the same rules as the indicator. Orders: a limit
+// entry at the MSS, half off at Target 1, the rest at the final target or 15:55 NY, stop to entry after Target 1.
+// Commission 0.02% per side and 1 tick of slippage are set in the strategy properties. Use it on a 5-minute chart.
+// Top-Down Framework (Ron, Nov 7, 2026). One indicator for the Claude Doc
+// "Top-Down Trading Framework: HTF Direction to ETF Execution".
+//   1. HTF -> DIRECTION: daily market structure, weekly state, daily support / resistance zones,
+//      dealing range (premium / discount) and the session bias. The daily decides; the weekly is shown only.
+//   2. ATF -> STRUCTURE AND BIAS: two analysis timeframes (default 4-hour and 1-hour) with BOS / CHoCH / MSS,
+//      POIs (FVG, order block, breaker, mitigation block, IFVG), untaken swing liquidity (EQH / EQL) and
+//      "who is in control".
+//   3. ETF -> CONFIRMATION AND EXECUTION on the chart timeframe (meant for the 5-minute chart): session
+//      windows, Asian range, midnight open, PDH / PDL / PWH / PWL, then POI -> sweep -> MSS -> limit order in
+//      the imbalance, stop, Target 1, final target and the trade preview.
+// Built for a future bot: higher-timeframe data uses completed bars only, the ETF logic runs on closed chart
+// bars, key values are in the Data Window and every order sends a JSON alert message.
+// Educational tool only; not financial advice.
+strategy("Top-Down Framework Strategy", shorttitle = "TDF-S", overlay = true, max_lines_count = 500, max_labels_count = 500,
+     max_boxes_count = 500, max_bars_back = 2000, initial_capital = 100000, commission_type = strategy.commission.percent,
+     commission_value = 0.02, slippage = 1, pyramiding = 0)
+
+// ================================================================ inputs
+grpV       = "View"
+viewIn     = input.string("Auto", "View", options = ["Auto", "Execution (5-15 min)", "Analysis (30 min - 4 hour)", "Direction (daily and up)"], group = grpV,
+     tooltip = "Auto picks the view from the chart: 15 minutes and below = Execution (today's setup only), 30 minutes to 4 hours = Analysis (ATF structure, POIs, liquidity), daily and up = Direction (structure, S/R zones, dealing range).")
+missMode   = input.string("Today only", "Setups that did not trade", options = ["Today only", "Never"], group = grpV)
+tblMode    = input.string("Auto", "Full 11-row checklist", options = ["Auto", "Always", "Never"], group = grpV,
+     tooltip = "Auto = only while a setup is active; otherwise the table shows a 6-row summary.")
+edgeBack   = input.int(30, "Edge drawings: start N bars before the last bar", minval = 5, maxval = 300, group = grpV)
+
+grpS       = "1. HTF: daily structure"
+showStructIn = input.bool(true, "Show the daily market structure", group = grpS)
+stTf       = input.timeframe("D", "Structure timeframe", group = grpS)
+atrLen     = input.int(14, "ATR length", minval = 1, group = grpS)
+swingMult  = input.float(2.0, "Swing size: a reversal of at least N x ATR", minval = 0.5, step = 0.25, group = grpS)
+eqTol      = input.float(0.25, "Equal highs / lows: within N x ATR", minval = 0.0, step = 0.05, group = grpS)
+bosSrc     = input.string("Close", "Break of structure needs a", options = ["Close", "Wick"], group = grpS)
+bosMargin  = input.float(0.0, "...beyond the level by N x ATR", minval = 0.0, step = 0.05, group = grpS)
+showZz     = input.bool(true, "Zig-zag line", group = grpS)
+showLbl    = input.bool(true, "HH / HL / LH / LL labels", group = grpS)
+showBox    = input.bool(true, "Structure boxes", group = grpS)
+showBoxTx  = input.bool(false, "Write the structure name in the box", group = grpS)
+showRange  = input.bool(true, "Consolidation range lines", group = grpS)
+showBos    = input.bool(true, "Daily break of structure lines", group = grpS)
+
+grpH       = "1. HTF: levels and bias"
+wkTf       = input.timeframe("W", "Weekly timeframe (shown in the table; the daily decides)", group = grpH)
+showSRIn = input.bool(true, "Daily support and resistance zones", group = grpH)
+srTol      = input.float(0.25, "S/R zone: two or more swing points within N x daily ATR", minval = 0.05, step = 0.05, group = grpH)
+maxSR      = input.int(8, "S/R zones kept", minval = 1, maxval = 30, group = grpH)
+showDRIn = input.bool(true, "Dealing range (premium / discount)", group = grpH)
+rangeEdge  = input.float(0.25, "Consolidation: trade only in the outer N of the range", minval = 0.05, maxval = 0.5, step = 0.05, group = grpH)
+showDayLiqIn = input.bool(true, "PDH / PDL / PWH / PWL lines", group = grpH)
+
+grpA       = "2. ATF: structure, POIs, liquidity"
+useAtf     = input.bool(true, "Turn on the ATF and ETF layers (chart must be below both ATF timeframes)", group = grpA)
+atfTfA     = input.timeframe("240", "ATF timeframe A (who is in control, POIs)", group = grpA)
+atfTfB     = input.timeframe("60", "ATF timeframe B (ATF bias, POIs)", group = grpA)
+pivK       = input.int(2, "Swing strength: bars on each side", minval = 1, maxval = 5, group = grpA)
+dispMult   = input.float(1.0, "Displacement: a candle body of at least N x ATR", minval = 0.1, step = 0.1, group = grpA)
+poiMinGap  = input.float(0.5, "POI FVG: at least N x ATR tall", minval = 0.0, step = 0.05, group = grpA)
+zoneLife   = input.int(120, "A POI expires after N bars of its timeframe", minval = 10, maxval = 1000, group = grpA)
+maxZones   = input.int(10, "POIs kept per timeframe", minval = 2, maxval = 40, group = grpA)
+ctrlNeeds  = input.string("MSS", "Who is in control: the reaction at the zone needs a timeframe-B", options = ["MSS", "CHoCH or MSS"], group = grpA)
+showPoiIn = input.bool(true, "Draw POIs", group = grpA)
+showAtfEvIn = input.bool(true, "Draw BOS / CHoCH / MSS", group = grpA)
+showLiqIn = input.bool(true, "Draw untaken swing highs and lows (EQH / EQL)", group = grpA)
+maxLiq     = input.int(24, "Swing liquidity lines kept", minval = 4, maxval = 100, group = grpA)
+
+grpE       = "3. ETF: confirmation and execution"
+nyWin      = input.session("0930-1130", "New York window (NY time)", group = grpE)
+useLdn     = input.bool(false, "Also trade the London window (futures)", group = grpE)
+ldnWin     = input.session("0200-0500", "London window (NY time)", group = grpE)
+showSessIn = input.bool(true, "Shade the session windows", group = grpE)
+showAsiaIn = input.bool(true, "Asian range (7 PM to midnight NY)", group = grpE)
+showMid0In = input.bool(true, "New York midnight open", group = grpE)
+entGap     = input.float(0.5, "Entry FVG: at least N x ATR tall", minval = 0.0, step = 0.05, group = grpE)
+fillAt     = input.string("Near edge", "Fill inside the imbalance at", options = ["Near edge", "50% of the gap", "Far edge"], group = grpE,
+     tooltip = "Near edge = the first price reached on the pullback (top of a bullish gap). Still an open question in the doc.")
+expiryBars = input.int(12, "Cancel an unfilled order after N bars", minval = 1, group = grpE)
+stopBuf    = input.float(0.1, "Stop buffer beyond the sweep (x ATR)", minval = 0.0, step = 0.05, group = grpE)
+minStopPct = input.float(0.20, "Minimum stop (% of price)", minval = 0.0, step = 0.05, group = grpE)
+minRR      = input.float(2.0, "Minimum reward to Target 1 (x risk)", minval = 0.5, step = 0.25, group = grpE)
+maxTrades  = input.int(2, "Maximum trades per day", minval = 1, group = grpE)
+maxLosses  = input.int(2, "Stop for the day after N losses", minval = 1, group = grpE)
+eodHHMM    = input.int(1555, "Close open trades at (HHMM, New York)", minval = 0, maxval = 2359, group = grpE)
+vBars      = input.int(6, "V-shaped recovery: MSS within N bars of the sweep", minval = 1, group = grpE)
+showTradesIn = input.bool(true, "Draw the setup markers and trade preview", group = grpE)
+
+grpF       = "Chart FVGs"
+showFvgIn = input.bool(true, "Show FVGs on the chart timeframe", group = grpF)
+fvgFilter  = input.string("All FVGs", "Which FVGs", options = ["All FVGs", "Only in the direction of the bias"], group = grpF)
+minAtr     = input.float(0.5, "Minimum height for a solid FVG (x ATR, 0 = off)", minval = 0.0, step = 0.05, group = grpF)
+minPct     = input.float(0.02, "Minimum height (% of price)", minval = 0.0, step = 0.01, group = grpF)
+mergeB2B   = input.bool(true, "Back-to-back FVGs (same direction, 1-2 bars apart): keep only the taller", group = grpF)
+fillMode   = input.string("Fully filled", "Stop extending when", options = ["Fully filled", "First touch"], group = grpF)
+shrink     = input.bool(true, "Shrink the box as the gap fills", group = grpF)
+maxExt     = input.int(60, "Extend boxes for at most N bars", minval = 3, maxval = 500, group = grpF)
+histMode   = input.string("Today only (faded)", "Past FVGs (filled or expired)", options = ["Today only (faded)", "All (faded)", "None"], group = grpF)
+maxGaps    = input.int(60, "Maximum FVGs kept on the chart", minval = 5, maxval = 200, group = grpF)
+showEma    = input.bool(true, "Show EMA", group = grpF)
+emaLen     = input.int(8, "EMA length", minval = 1, group = grpF)
+
+grpR       = "Strategy"
+riskPct    = input.float(1.0, "Risk per trade (% of equity)", minval = 0.1, step = 0.1, group = grpR)
+
+grpT       = "Table"
+showTable  = input.bool(true, "Checklist table", group = grpT)
+tblPosIn   = input.string("Top right", "Table position", options = ["Top right", "Bottom right", "Top left", "Bottom left"], group = grpT)
+
+cUp   = #1a9e6a
+cDn   = #d64545
+cRg   = #808080
+cZz   = #334155
+cDem  = #1a9e6a
+cSup  = #d64545
+cBsl  = #2563eb
+cSsl  = #9333ea
+cSR   = #b45309
+tz    = "America/New_York"
+
+// ================================================================ view: what each chart shows
+tfSec = timeframe.in_seconds()
+vMode = viewIn == "Auto" ? (tfSec <= 900 ? 1 : tfSec < 86400 ? 2 : 3) : viewIn == "Execution (5-15 min)" ? 1 : viewIn == "Analysis (30 min - 4 hour)" ? 2 : 3
+vExec = vMode == 1
+vAna  = vMode == 2
+vDir  = vMode == 3
+showStruct = showStructIn and vDir              // daily structure drawings: Direction view
+showSR     = showSRIn and vDir                  // full S/R boxes: Direction view (edge zones elsewhere)
+showDR     = showDRIn and vDir                  // premium / discount shading: Direction view (edge lines elsewhere)
+showDayLiq = showDayLiqIn and not vDir
+showPoi    = showPoiIn and vAna                 // all ATF POIs: Analysis view (nearest two at the edge in Execution)
+showAtfEv  = showAtfEvIn and vAna
+showLiq    = showLiqIn and vAna                 // all untaken swing liquidity: Analysis view (nearest three a side in Execution)
+showSess   = showSessIn and vExec
+showAsia   = showAsiaIn and vExec
+showMid0   = showMid0In and vExec
+showTrades = showTradesIn and vExec
+showFvg    = showFvgIn and not vAna             // chart-timeframe FVGs (the ATF engines draw their own in Analysis)
+
+// ================================================================ 1. HTF: daily market structure (completed bars)
+[hT, hH, hL, hC, hA] = request.security(syminfo.tickerid, stTf, [time[1], high[1], low[1], close[1], ta.atr(atrLen)[1]], lookahead = barmerge.lookahead_on)
+newHtf = not na(hT) and hT != hT[1]
+
+var tA = array.new<int>()
+var hA_ = array.new<float>()
+var lA_ = array.new<float>()
+
+type S
+    int st = 0                  // 0 none yet, 1 uptrend, -1 downtrend, 2 consolidation
+    float protLow = na
+    int protLowB = na
+    float protHigh = na
+    int protHighB = na
+    float rangeHi = na
+    int rangeHiB = na
+    float rangeLo = na
+    int rangeLoB = na
+    box rb = na
+    float rbTop = na
+    float rbBot = na
+    line rHiLn = na
+    line rLoLn = na
+
+var S z = S.new()
+var int dir = 0
+var float extP = na
+var int extB = 0
+var float lastSwP = na
+var int lastSwB = na
+var line legLn = na
+var float h0 = na
+var float h1 = na
+var int h1B = na
+var float l0 = na
+var float l1 = na
+var int l1B = na
+var int nH = 0
+var int nL = 0
+var float dC = na               // last completed daily close
+var float dAtr = na
+
+stName(int s) => s == 1 ? "UPTREND" : s == -1 ? "DOWNTREND" : s == 2 ? "CONSOLIDATION" : "-"
+stCol(int s) => s == 1 ? cUp : s == -1 ? cDn : cRg
+tx(int i) => tA.get(i)
+
+startBox(int s, int b0, int i) =>
+    if showBox and showStruct
+        if not na(z.rb)
+            box.set_right(z.rb, tx(b0))
+        top = hA_.get(b0)
+        bot = lA_.get(b0)
+        for j = b0 to i
+            top := math.max(top, hA_.get(j))
+            bot := math.min(bot, lA_.get(j))
+        z.rbTop := top
+        z.rbBot := bot
+        z.rb := box.new(tx(b0), top, time, bot, xloc = xloc.bar_time, border_color = color.new(stCol(s), 60),
+             bgcolor = color.new(stCol(s), 90), text = showBoxTx ? stName(s) : "", text_size = size.small,
+             text_color = color.new(stCol(s), 0), text_halign = text.align_left, text_valign = text.align_top)
+    0
+
+setRangeLines(bool on) =>
+    if not na(z.rHiLn)
+        line.set_x2(z.rHiLn, time)
+        line.set_x2(z.rLoLn, time)
+    z.rHiLn := na
+    z.rLoLn := na
+    if on and showRange and showStruct
+        z.rHiLn := line.new(tx(z.rangeHiB), z.rangeHi, time, z.rangeHi, xloc = xloc.bar_time, color = color.new(cRg, 0), style = line.style_dashed)
+        z.rLoLn := line.new(tx(z.rangeLoB), z.rangeLo, time, z.rangeLo, xloc = xloc.bar_time, color = color.new(cRg, 0), style = line.style_dashed)
+    0
+
+enterRange(float hi, int hiB, float lo, int loB, int b0, int i) =>
+    z.st := 2
+    z.rangeHi := hi
+    z.rangeHiB := hiB
+    z.rangeLo := lo
+    z.rangeLoB := loB
+    startBox(2, b0, i)
+    setRangeLines(true)
+    0
+
+bosLine(float lvl, int fromB, int i, bool up) =>
+    if showBos and showStruct
+        col = up ? cUp : cDn
+        line.new(tx(fromB), lvl, tx(i), lvl, xloc = xloc.bar_time, color = color.new(col, 0), width = 2)
+        label.new(int((tx(fromB) + tx(i)) / 2), lvl, "Daily BOS", xloc = xloc.bar_time, style = up ? label.style_label_down : label.style_label_up,
+             color = color.new(color.white, 100), textcolor = color.new(col, 0), size = size.small)
+    0
+
+// ---- daily support / resistance zones (two or more swing points within srTol x ATR)
+type SR
+    box bx
+    float top
+    float bot
+    bool res
+
+var srs  = array.new<SR>()
+var swHP = array.new<float>()
+var swHT = array.new<int>()
+var swLP = array.new<float>()
+var swLT = array.new<int>()
+
+srPaint(SR s) =>
+    if not na(s.bx)
+        box.set_bgcolor(s.bx, color.new(s.res ? cSup : cDem, 90))
+        box.set_border_color(s.bx, color.new(cSR, 40))
+        box.set_text(s.bx, s.res ? "Daily resistance" : "Daily support")
+        box.set_text_color(s.bx, color.new(cSR, 10))
+    0
+
+srMake(float top, float bot, int t0, bool res) =>
+    merged = false
+    for s in srs
+        if not merged and s.top >= bot and s.bot <= top
+            merged := true
+            s.top := math.max(s.top, top)
+            s.bot := math.min(s.bot, bot)
+            if not na(s.bx)
+                box.set_top(s.bx, s.top)
+                box.set_bottom(s.bx, s.bot)
+    if not merged
+        box bx = na
+        if showSR
+            bx := box.new(t0, top, time, bot, xloc = xloc.bar_time, text_size = size.tiny, text_halign = text.align_left, text_valign = text.align_top)
+        sNew = SR.new(bx, top, bot, res)
+        srPaint(sNew)
+        srs.push(sNew)
+        while srs.size() > maxSR
+            old = srs.shift()
+            if not na(old.bx)
+                box.delete(old.bx)
+    0
+
+srCheck(array<float> ps, array<int> ts, float p, int t, float tol, bool res) =>
+    if ps.size() > 0
+        found = false
+        for q = ps.size() - 1 to math.max(0, ps.size() - 10)
+            if not found and math.abs(ps.get(q) - p) <= tol
+                found := true
+                srMake(math.max(ps.get(q), p), math.min(ps.get(q), p), ts.get(q), res)
+    ps.push(p)
+    ts.push(t)
+    0
+
+bosUp = false
+bosDn = false
+if newHtf
+    tA.push(hT)
+    hA_.push(hH)
+    lA_.push(hL)
+    dC := hC
+    dAtr := hA
+    i = tA.size() - 1
+    // ---- zig-zag swings
+    newHigh = false
+    newLow = false
+    float swP = na
+    int swB = na
+    if dir == 0
+        dir := 1
+        extP := hH
+        extB := i
+        0
+    else if dir == 1
+        if hH >= extP
+            extP := hH
+            extB := i
+            0
+        else if not na(hA) and hL <= extP - swingMult * hA
+            newHigh := true
+            swP := extP
+            swB := extB
+            dir := -1
+            lo = hL
+            lb = i
+            for j = extB + 1 to i
+                if lA_.get(j) < lo
+                    lo := lA_.get(j)
+                    lb := j
+            extP := lo
+            extB := lb
+            0
+        0
+    else
+        if hL <= extP
+            extP := hL
+            extB := i
+            0
+        else if not na(hA) and hH >= extP + swingMult * hA
+            newLow := true
+            swP := extP
+            swB := extB
+            dir := 1
+            hi = hH
+            hb = i
+            for j = extB + 1 to i
+                if hA_.get(j) > hi
+                    hi := hA_.get(j)
+                    hb := j
+            extP := hi
+            extB := hb
+            0
+        0
+    // ---- label the swing and update the structure
+    tol = eqTol * nz(hA)
+    if newHigh or newLow
+        if showZz and showStruct and not na(lastSwB)
+            line.new(tx(lastSwB), lastSwP, tx(swB), swP, xloc = xloc.bar_time, color = color.new(cZz, 0), width = 2)
+        lastSwP := swP
+        lastSwB := swB
+    if newHigh
+        kind = nH == 0 ? "H" : swP > h1 + tol ? "HH" : swP < h1 - tol ? "LH" : "EQH"
+        if showLbl and showStruct
+            label.new(tx(swB), swP, kind, xloc = xloc.bar_time, style = label.style_label_down, color = color.new(color.white, 100),
+                 textcolor = kind == "HH" ? cUp : kind == "LH" ? cDn : cRg, size = size.small)
+        srCheck(swHP, swHT, swP, tx(swB), srTol * nz(hA), true)
+        prevH = h1
+        prevHB = h1B
+        h0 := h1
+        h1 := swP
+        h1B := swB
+        nH += 1
+        if z.st == 1 and kind != "HH"
+            topB = prevH >= swP ? prevHB : swB
+            enterRange(math.max(prevH, swP), topB, z.protLow, z.protLowB, topB, i)
+            0
+        else if z.st == -1
+            if kind == "HH" and swP > z.protHigh
+                enterRange(swP, swB, l1, l1B, l1B, i)
+                0
+            else
+                z.protHigh := swP
+                z.protHighB := swB
+                0
+            0
+        else if z.st == 2 and swP > z.rangeHi
+            z.rangeHi := swP
+            z.rangeHiB := swB
+            if not na(z.rHiLn)
+                line.set_xy1(z.rHiLn, tx(swB), swP)
+                line.set_y2(z.rHiLn, swP)
+            0
+    if newLow
+        kind = nL == 0 ? "L" : swP < l1 - tol ? "LL" : swP > l1 + tol ? "HL" : "EQL"
+        if showLbl and showStruct
+            label.new(tx(swB), swP, kind, xloc = xloc.bar_time, style = label.style_label_up, color = color.new(color.white, 100),
+                 textcolor = kind == "HL" ? cUp : kind == "LL" ? cDn : cRg, size = size.small)
+        srCheck(swLP, swLT, swP, tx(swB), srTol * nz(hA), false)
+        prevL = l1
+        prevLB = l1B
+        l0 := l1
+        l1 := swP
+        l1B := swB
+        nL += 1
+        if z.st == -1 and kind != "LL"
+            botB = prevL <= swP ? prevLB : swB
+            enterRange(z.protHigh, z.protHighB, math.min(prevL, swP), botB, botB, i)
+            0
+        else if z.st == 1
+            if kind == "LL" and swP < z.protLow
+                enterRange(h1, h1B, swP, swB, h1B, i)
+                0
+            else
+                z.protLow := swP
+                z.protLowB := swB
+                0
+            0
+        else if z.st == 2 and swP < z.rangeLo
+            z.rangeLo := swP
+            z.rangeLoB := swB
+            if not na(z.rLoLn)
+                line.set_xy1(z.rLoLn, tx(swB), swP)
+                line.set_y2(z.rLoLn, swP)
+            0
+    if z.st == 0 and nH >= 2 and nL >= 2 and (newHigh or newLow)
+        b0 = math.min(h1B, l1B)
+        if h1 > h0 and l1 > l0
+            z.st := 1
+            z.protLow := l1
+            z.protLowB := l1B
+            startBox(1, b0, i)
+            0
+        else if h1 < h0 and l1 < l0
+            z.st := -1
+            z.protHigh := h1
+            z.protHighB := h1B
+            startBox(-1, b0, i)
+            0
+        else
+            enterRange(math.max(h0, h1), h1B, math.min(l0, l1), l1B, b0, i)
+            0
+    // ---- break of structure on the completed daily bar
+    m = bosMargin * nz(hA)
+    upPx = bosSrc == "Close" ? hC : hH
+    dnPx = bosSrc == "Close" ? hC : hL
+    if z.st == 1 and dnPx < z.protLow - m
+        bosLine(z.protLow, z.protLowB, i, false)
+        bosDn := true
+        0
+    else if z.st == -1 and upPx > z.protHigh + m
+        bosLine(z.protHigh, z.protHighB, i, true)
+        bosUp := true
+        0
+    else if z.st == 2
+        if upPx > z.rangeHi + m
+            bosLine(z.rangeHi, z.rangeHiB, i, true)
+            bosUp := true
+            0
+        else if dnPx < z.rangeLo - m
+            bosLine(z.rangeLo, z.rangeLoB, i, false)
+            bosDn := true
+            0
+        0
+    if bosUp or bosDn
+        if z.st == 2
+            setRangeLines(false)
+        if bosUp
+            z.st := 1
+            z.protLow := l1
+            z.protLowB := l1B
+            startBox(1, nz(l1B, i), i)
+            0
+        else
+            z.st := -1
+            z.protHigh := h1
+            z.protHighB := h1B
+            startBox(-1, nz(h1B, i), i)
+            0
+    if showBox and showStruct and not na(z.rb)
+        z.rbTop := math.max(z.rbTop, hH)
+        z.rbBot := math.min(z.rbBot, hL)
+        box.set_top(z.rb, z.rbTop)
+        box.set_bottom(z.rb, z.rbBot)
+    if showZz and showStruct and not na(lastSwB)
+        if na(legLn)
+            legLn := line.new(tx(lastSwB), lastSwP, tx(extB), extP, xloc = xloc.bar_time, color = color.new(cZz, 40), style = line.style_dashed)
+            0
+        else
+            line.set_xy1(legLn, tx(lastSwB), lastSwP)
+            line.set_xy2(legLn, tx(extB), extP)
+            0
+    // ---- a daily close through an S/R zone flips it (resistance becomes support)
+    for s in srs
+        if s.res and hC > s.top
+            s.res := false
+            srPaint(s)
+            0
+        else if not s.res and hC < s.bot
+            s.res := true
+            srPaint(s)
+            0
+
+if not na(z.rb)
+    box.set_right(z.rb, time)
+if z.st == 2 and not na(z.rHiLn)
+    line.set_x2(z.rHiLn, time)
+    line.set_x2(z.rLoLn, time)
+for s in srs
+    if not na(s.bx)
+        box.set_right(s.bx, time)
+
+// ---- weekly state (shown only; the daily decides)
+wkState() =>
+    ph_ = ta.pivothigh(high, 2, 2)
+    pl_ = ta.pivotlow(low, 2, 2)
+    a1 = ta.valuewhen(not na(ph_), ph_, 0)
+    a0 = ta.valuewhen(not na(ph_), ph_, 1)
+    b1 = ta.valuewhen(not na(pl_), pl_, 0)
+    b0 = ta.valuewhen(not na(pl_), pl_, 1)
+    s = a1 > a0 and b1 > b0 ? 1 : a1 < a0 and b1 < b0 ? -1 : 2
+    s[1]
+wkSt = request.security(syminfo.tickerid, wkTf, wkState(), lookahead = barmerge.lookahead_on)
+
+// ---- dealing range: the current daily leg, from its last swing to its extreme
+dlHi = dir == 1 ? math.max(nz(h1, extP), extP) : h1
+dlLo = dir == 1 ? l1 : math.min(nz(l1, extP), extP)
+eq = (dlHi + dlLo) / 2
+
+var box bxPrem = na
+var box bxDisc = na
+var line lnEq = na
+if showDR and newHtf and not na(eq) and tA.size() > 0
+    if not na(bxPrem)
+        box.delete(bxPrem)
+        box.delete(bxDisc)
+        line.delete(lnEq)
+    lastI = tA.size() - 1
+    t0 = tx(math.min(nz(h1B, lastI), nz(l1B, lastI)))
+    bxPrem := box.new(t0, dlHi, time, eq, xloc = xloc.bar_time, bgcolor = color.new(cDn, 96), border_color = color.new(cDn, 100),
+         text = "Premium", text_size = size.tiny, text_color = color.new(cDn, 40), text_halign = text.align_left, text_valign = text.align_top)
+    bxDisc := box.new(t0, eq, time, dlLo, xloc = xloc.bar_time, bgcolor = color.new(cUp, 96), border_color = color.new(cUp, 100),
+         text = "Discount", text_size = size.tiny, text_color = color.new(cUp, 40), text_halign = text.align_left, text_valign = text.align_bottom)
+    lnEq := line.new(t0, eq, time, eq, xloc = xloc.bar_time, color = color.new(cRg, 30), style = line.style_dotted)
+if not na(bxPrem)
+    box.set_right(bxPrem, time)
+    box.set_right(bxDisc, time)
+    line.set_x2(lnEq, time)
+
+// ---- session bias, read from the last completed daily bar (fixed for the session)
+rangePos = z.st == 2 and z.rangeHi > z.rangeLo ? (dC - z.rangeLo) / (z.rangeHi - z.rangeLo) : na
+bias = z.st == 1 ? 1 : z.st == -1 ? -1 : z.st == 2 ? (rangePos <= rangeEdge ? 1 : rangePos >= 1 - rangeEdge ? -1 : 0) : 0
+
+// ---- prior day / week levels
+[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pwH, pwL] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+
+lvlNew(line ln, label lb, float p, string txt, color col) =>
+    if not na(ln)
+        line.delete(ln)
+    if not na(lb)
+        label.delete(lb)
+    nl = line.new(time, p, time, p, xloc = xloc.bar_time, color = color.new(col, 20), style = line.style_dashed)
+    nb = label.new(time, p, txt, xloc = xloc.bar_time, style = label.style_label_left, color = color.new(color.white, 100), textcolor = col, size = size.tiny)
+    [nl, nb]
+
+lvlExt(line ln, label lb) =>
+    if not na(ln)
+        line.set_x2(ln, time)
+        label.set_x(lb, time)
+    0
+
+var line lnPDH = na
+var label lbPDH = na
+var line lnPDL = na
+var label lbPDL = na
+var line lnPWH = na
+var label lbPWH = na
+var line lnPWL = na
+var label lbPWL = na
+if showDayLiq and timeframe.isintraday
+    if not na(pdH) and (na(pdH[1]) or pdH != pdH[1])
+        [x1, y1] = lvlNew(lnPDH, lbPDH, pdH, "PDH", cBsl)
+        lnPDH := x1
+        lbPDH := y1
+    if not na(pdL) and (na(pdL[1]) or pdL != pdL[1])
+        [x2, y2] = lvlNew(lnPDL, lbPDL, pdL, "PDL", cSsl)
+        lnPDL := x2
+        lbPDL := y2
+    if not na(pwH) and (na(pwH[1]) or pwH != pwH[1])
+        [x3, y3] = lvlNew(lnPWH, lbPWH, pwH, "PWH", cBsl)
+        lnPWH := x3
+        lbPWH := y3
+    if not na(pwL) and (na(pwL[1]) or pwL != pwL[1])
+        [x4, y4] = lvlNew(lnPWL, lbPWL, pwL, "PWL", cSsl)
+        lnPWL := x4
+        lbPWL := y4
+    lvlExt(lnPDH, lbPDH)
+    lvlExt(lnPDL, lbPDL)
+    lvlExt(lnPWH, lbPWH)
+    lvlExt(lnPWL, lbPWL)
+
+// ================================================================ 2. ATF: structure, POIs, liquidity
+// ---- swing liquidity (untaken ATF swing highs = buy-side, lows = sell-side)
+type Liq
+    line ln
+    label lb
+    float p
+    bool hi
+    bool live
+    bool isEq
+
+var liqs = array.new<Liq>()
+
+liqAdd(float p, int t, bool hi, float aa) =>
+    eqv = false
+    for o in liqs
+        if o.live and o.hi == hi and math.abs(o.p - p) <= eqTol * aa
+            eqv := true
+    line ln = na
+    label lb = na
+    if showLiq
+        ln := line.new(t, p, time, p, xloc = xloc.bar_time, color = color.new(hi ? cBsl : cSsl, 35), style = line.style_dotted)
+        if eqv
+            lb := label.new(t, p, hi ? "EQH" : "EQL", xloc = xloc.bar_time, style = hi ? label.style_label_down : label.style_label_up,
+                 color = color.new(color.white, 100), textcolor = hi ? cBsl : cSsl, size = size.tiny)
+    liqs.push(Liq.new(ln, lb, p, hi, true, eqv))
+    while liqs.size() > maxLiq
+        old = liqs.shift()
+        if not na(old.ln)
+            line.delete(old.ln)
+        if not na(old.lb)
+            label.delete(old.lb)
+    0
+
+// ---- POIs and the timeframe engine
+type Zone
+    box bx
+    int kind            // 1 FVG, 2 order block, 3 breaker, 4 mitigation block, 5 IFVG
+    bool bull
+    float top
+    float bot
+    int t0
+    int bornI
+    bool fresh
+    bool cause
+
+type Eng
+    string tag
+    bool draw
+    array<int> t
+    array<float> o
+    array<float> h
+    array<float> l
+    array<float> c
+    array<float> a
+    array<Zone> zs
+    float sh1 = na
+    int sh1i = na
+    float sh0 = na
+    bool shDone = true
+    float sl1 = na
+    int sl1i = na
+    float sl0 = na
+    bool slDone = true
+    int trend = 0               // 1 up, -1 down
+    int ev = 0                  // this bar: 1 BOS, 2 CHoCH, 3 MSS (negative = bearish)
+    int lastEv = 0
+    int bullTouchT = na
+    int bearTouchT = na
+    bool bullBroken = false
+    bool bearBroken = false
+
+kindName(int k) => k == 1 ? "FVG" : k == 2 ? "OB" : k == 3 ? "Breaker" : k == 4 ? "Mitigation" : "IFVG"
+tfTag(string tf) => tf == "240" ? "4H" : tf == "120" ? "2H" : tf == "60" ? "1H" : tf == "30" ? "30m" : tf == "D" ? "D" : tf
+
+zPaint(Zone zn) =>
+    if not na(zn.bx)
+        col = zn.bull ? cDem : cSup
+        box.set_bgcolor(zn.bx, color.new(col, zn.fresh ? 82 : 93))
+        box.set_border_color(zn.bx, color.new(col, zn.fresh ? 45 : 80))
+        box.set_text_color(zn.bx, color.new(col, zn.fresh ? 10 : 60))
+    0
+
+zAdd(Eng e, int kind, bool bull, float top, float bot, int t0, bool cause) =>
+    if top > bot
+        box bx = na
+        if e.draw and showPoi
+            bx := box.new(t0, top, time, bot, xloc = xloc.bar_time, text = e.tag + " " + kindName(kind), text_size = size.tiny,
+                 text_halign = text.align_right, text_valign = text.align_center)
+        zn = Zone.new(bx, kind, bull, top, bot, t0, e.t.size() - 1, true, cause)
+        e.zs.push(zn)
+        zPaint(zn)
+        while e.zs.size() > maxZones
+            old = e.zs.shift()
+            if not na(old.bx)
+                box.delete(old.bx)
+    0
+
+zFlip(Eng e, Zone zn, int newKind, int i) =>
+    zn.kind := newKind
+    zn.bull := not zn.bull
+    zn.fresh := true
+    zn.cause := true
+    zn.bornI := i
+    if not na(zn.bx)
+        box.set_text(zn.bx, e.tag + " " + kindName(newKind))
+    zPaint(zn)
+    0
+
+zKill(Eng e, int q) =>
+    zn = e.zs.get(q)
+    if not na(zn.bx)
+        box.delete(zn.bx)
+    e.zs.remove(q)
+    0
+
+engPush(Eng e, int tt, float oo, float hh, float ll, float cc, float aa) =>
+    e.t.push(tt)
+    e.o.push(oo)
+    e.h.push(hh)
+    e.l.push(ll)
+    e.c.push(cc)
+    e.a.push(na(aa) ? hh - ll : aa)
+    0
+
+// displacement test for the leg startI..endI: a body of at least dispMult x ATR AND an FVG of poiMinGap x ATR
+legOk(Eng e, int startI, int endI, bool up) =>
+    bodyOk = false
+    gapOk = false
+    f = math.max(startI, endI - 40, 0)
+    if endI > f
+        for m = f + 1 to endI
+            aa = e.a.get(m)
+            body = e.c.get(m) - e.o.get(m)
+            if (up ? body : -body) >= dispMult * aa
+                bodyOk := true
+            if m - 2 >= f
+                g = up ? e.l.get(m) - e.h.get(m - 2) : e.l.get(m - 2) - e.h.get(m)
+                if g > 0 and g >= poiMinGap * aa
+                    gapOk := true
+    bodyOk and gapOk
+
+evDraw(Eng e, float lvl, int fromI, int i, int ev) =>
+    if showAtfEv and e.draw
+        up = ev > 0
+        col = up ? cUp : cDn
+        k = math.abs(ev)
+        txt = (k == 1 ? "BOS" : k == 2 ? "CHoCH" : "MSS") + " " + e.tag
+        line.new(e.t.get(fromI), lvl, e.t.get(i), lvl, xloc = xloc.bar_time, color = color.new(col, k == 3 ? 0 : 35),
+             style = k == 1 ? line.style_dotted : line.style_dashed, width = k == 3 ? 2 : 1)
+        label.new(e.t.get(i), lvl, txt, xloc = xloc.bar_time, style = up ? label.style_label_down : label.style_label_up,
+             color = color.new(color.white, 100), textcolor = color.new(col, 0), size = size.tiny)
+    0
+
+// order block: the opposite-colour candle with the most extreme price in the leg before the break
+obAdd(Eng e, int startI, int i, bool up) =>
+    f = math.max(startI, i - 30, 0)
+    int best = na
+    float bestP = na
+    if i - 1 >= f
+        for m = f to i - 1
+            isOpp = up ? e.c.get(m) < e.o.get(m) : e.c.get(m) > e.o.get(m)
+            p = up ? e.l.get(m) : e.h.get(m)
+            if isOpp and (na(best) or (up ? p < bestP : p > bestP))
+                best := m
+                bestP := p
+    if na(best)
+        best := f
+    dup = false
+    for zn in e.zs
+        if zn.kind == 2 and zn.t0 == e.t.get(best)
+            dup := true
+    if not dup
+        zAdd(e, 2, up, e.h.get(best), e.l.get(best), e.t.get(best), true)
+    0
+
+engStep(Eng e) =>
+    i = e.t.size() - 1
+    e.ev := 0
+    e.bullBroken := false
+    e.bearBroken := false
+    k = pivK
+    // ---- 1. fractal swings (k bars on each side), with their liquidity
+    if i >= 2 * k
+        j = i - k
+        isH = true
+        isL = true
+        for m = j - k to j + k
+            if m < j
+                if e.h.get(m) >= e.h.get(j)
+                    isH := false
+                if e.l.get(m) <= e.l.get(j)
+                    isL := false
+            if m > j
+                if e.h.get(m) > e.h.get(j)
+                    isH := false
+                if e.l.get(m) < e.l.get(j)
+                    isL := false
+        if isH
+            e.sh0 := e.sh1
+            e.sh1 := e.h.get(j)
+            e.sh1i := j
+            e.shDone := false
+            liqAdd(e.h.get(j), e.t.get(j), true, e.a.get(j))
+        if isL
+            e.sl0 := e.sl1
+            e.sl1 := e.l.get(j)
+            e.sl1i := j
+            e.slDone := false
+            liqAdd(e.l.get(j), e.t.get(j), false, e.a.get(j))
+    // ---- 2. new FVGs
+    aa = e.a.get(i)
+    if i >= 2
+        if e.l.get(i) > e.h.get(i - 2) and e.l.get(i) - e.h.get(i - 2) >= poiMinGap * aa
+            zAdd(e, 1, true, e.l.get(i), e.h.get(i - 2), e.t.get(i - 2), false)
+        if e.h.get(i) < e.l.get(i - 2) and e.l.get(i - 2) - e.h.get(i) >= poiMinGap * aa
+            zAdd(e, 1, false, e.l.get(i - 2), e.h.get(i), e.t.get(i - 2), false)
+    // ---- 3. breaks: BOS (with the trend), CHoCH (first against it), MSS (CHoCH with displacement + FVG)
+    cc = e.c.get(i)
+    if not e.shDone and cc > e.sh1
+        e.shDone := true
+        st0 = nz(e.sl1i, i)
+        ev = e.trend == -1 ? (legOk(e, st0, i, true) ? 3 : 2) : 1
+        e.ev := ev
+        e.lastEv := ev
+        e.trend := 1
+        evDraw(e, e.sh1, e.sh1i, i, ev)
+        obAdd(e, st0, i, true)
+        for zn in e.zs
+            if zn.kind == 1 and zn.bull and zn.bornI >= st0
+                zn.cause := true
+    if not e.slDone and cc < e.sl1
+        e.slDone := true
+        st1 = nz(e.sh1i, i)
+        ev = e.trend == 1 ? (legOk(e, st1, i, false) ? -3 : -2) : -1
+        e.ev := ev
+        e.lastEv := ev
+        e.trend := -1
+        evDraw(e, e.sl1, e.sl1i, i, ev)
+        obAdd(e, st1, i, false)
+        for zn in e.zs
+            if zn.kind == 1 and not zn.bull and zn.bornI >= st1
+                zn.cause := true
+    // ---- 4. zone life: touched (no longer fresh), closed through (flips or dies), expired
+    hh = e.h.get(i)
+    ll = e.l.get(i)
+    if e.zs.size() > 0
+        for q = e.zs.size() - 1 to 0
+            zn = e.zs.get(q)
+            if zn.bornI >= i
+                continue
+            if i - zn.bornI > zoneLife
+                zKill(e, q)
+                continue
+            if zn.bull
+                if ll <= zn.top
+                    e.bullTouchT := e.t.get(i)
+                    if zn.fresh
+                        zn.fresh := false
+                        zPaint(zn)
+                if cc < zn.bot
+                    e.bullBroken := true
+                    if zn.kind == 1
+                        zFlip(e, zn, 5, i)
+                        0
+                    else if zn.kind == 2
+                        zFlip(e, zn, e.sh1 > e.sh0 ? 3 : 4, i)
+                        0
+                    else
+                        zKill(e, q)
+                        0
+            else
+                if hh >= zn.bot
+                    e.bearTouchT := e.t.get(i)
+                    if zn.fresh
+                        zn.fresh := false
+                        zPaint(zn)
+                if cc > zn.top
+                    e.bearBroken := true
+                    if zn.kind == 1
+                        zFlip(e, zn, 5, i)
+                        0
+                    else if zn.kind == 2
+                        zFlip(e, zn, e.sl1 < e.sl0 ? 3 : 4, i)
+                        0
+                    else
+                        zKill(e, q)
+                        0
+    0
+
+engExtend(Eng e) =>
+    for zn in e.zs
+        if not na(zn.bx)
+            box.set_right(zn.bx, time)
+    0
+
+// ---- feed both engines with completed bars of their timeframes
+[aT, aO, aH, aL, aC, aA] = request.security(syminfo.tickerid, atfTfA, [time[1], open[1], high[1], low[1], close[1], ta.atr(14)[1]], lookahead = barmerge.lookahead_on)
+[bT, bO, bH, bL, bC, bA] = request.security(syminfo.tickerid, atfTfB, [time[1], open[1], high[1], low[1], close[1], ta.atr(14)[1]], lookahead = barmerge.lookahead_on)
+okA = useAtf and tfSec <= timeframe.in_seconds(atfTfA)
+okB = useAtf and tfSec <= timeframe.in_seconds(atfTfB)
+etfOn = useAtf and tfSec < timeframe.in_seconds(atfTfA) and tfSec < timeframe.in_seconds(atfTfB) and timeframe.isintraday
+
+var Eng eA = Eng.new(tag = tfTag(atfTfA), draw = true, t = array.new<int>(), o = array.new<float>(), h = array.new<float>(),
+     l = array.new<float>(), c = array.new<float>(), a = array.new<float>(), zs = array.new<Zone>())
+var Eng eB = Eng.new(tag = tfTag(atfTfB), draw = true, t = array.new<int>(), o = array.new<float>(), h = array.new<float>(),
+     l = array.new<float>(), c = array.new<float>(), a = array.new<float>(), zs = array.new<Zone>())
+
+newA = okA and not na(aT) and aT != aT[1]
+newB = okB and not na(bT) and bT != bT[1]
+if newA
+    engPush(eA, aT, aO, aH, aL, aC, aA)
+    engStep(eA)
+if newB
+    engPush(eB, bT, bO, bH, bL, bC, bA)
+    engStep(eB)
+engExtend(eA)
+engExtend(eB)
+
+// ---- who is in control: the side whose timeframe-A zone price last reacted from, confirmed by a timeframe-B MSS
+var int ctrl = 0
+if newB
+    upOk = ctrlNeeds == "MSS" ? eB.ev == 3 : eB.ev >= 2
+    dnOk = ctrlNeeds == "MSS" ? eB.ev == -3 : eB.ev <= -2
+    if upOk and not na(eA.bullTouchT) and (na(eA.bearTouchT) or eA.bullTouchT >= eA.bearTouchT)
+        ctrl := 1
+    if dnOk and not na(eA.bearTouchT) and (na(eA.bullTouchT) or eA.bearTouchT >= eA.bullTouchT)
+        ctrl := -1
+if newA
+    if ctrl == 1 and eA.bullBroken
+        ctrl := -1
+        0
+    else if ctrl == -1 and eA.bearBroken
+        ctrl := 1
+        0
+
+// ================================================================ 3. ETF: sessions, levels, sweep, MSS, entry
+atrC = ta.atr(14)
+nyDay = dayofmonth(time, tz)
+newDay = nyDay != nyDay[1]
+nyMin = hour(time, tz) * 60 + minute(time, tz)
+eodMin = int(eodHHMM / 100) * 60 + eodHHMM % 100
+inNY = not na(time(timeframe.period, nyWin, tz))
+inLdn = useLdn and not na(time(timeframe.period, ldnWin, tz))
+inWin = inNY or inLdn
+bgcolor(showSess and timeframe.isintraday and inWin ? color.new(cBsl, 94) : na, title = "Session window")
+
+// ---- Asian range (7 PM to midnight New York)
+inAsia = not na(time(timeframe.period, "1900-2359", tz))
+var float asH = na
+var float asL = na
+var int asT0 = na
+var float asiaHiV = na
+var float asiaLoV = na
+var box asBox = na
+if inAsia and not inAsia[1]
+    asH := high
+    asL := low
+    asT0 := time
+    asiaHiV := na
+    asiaLoV := na
+    0
+else if inAsia
+    asH := math.max(asH, high)
+    asL := math.min(asL, low)
+    0
+if not inAsia and inAsia[1] and not na(asH) and timeframe.isintraday
+    asiaHiV := asH
+    asiaLoV := asL
+    if showAsia
+        if not na(asBox)
+            box.delete(asBox)
+        asBox := box.new(asT0, asH, time, asL, xloc = xloc.bar_time, bgcolor = color.new(cRg, 92), border_color = color.new(cRg, 60),
+             text = "Asian range", text_size = size.tiny, text_color = color.new(cRg, 20), text_halign = text.align_left, text_valign = text.align_top)
+if not na(asBox) and not na(asiaHiV)
+    box.set_right(asBox, time)
+
+// ---- New York midnight open
+var float midOpen = na
+var line midLn = na
+if newDay and timeframe.isintraday
+    midOpen := hour(time, tz) == 0 ? open : na
+    midLn := na
+    if showMid0 and not na(midOpen)
+        midLn := line.new(time, midOpen, time, midOpen, xloc = xloc.bar_time, color = color.new(#0f766e, 0), style = line.style_dotted, width = 1)
+        label.new(time, midOpen, "NY midnight open", xloc = xloc.bar_time, style = label.style_label_right, color = color.new(color.white, 100),
+             textcolor = #0f766e, size = size.tiny)
+if not na(midLn)
+    line.set_x2(midLn, time)
+
+// ---- chart swings (for the MSS level, sweeps and targets)
+ph = ta.pivothigh(high, 2, 2)
+pl = ta.pivotlow(low, 2, 2)
+hh10 = ta.highest(high, 10)
+ll10 = ta.lowest(low, 10)
+var cph = array.new<float>()
+var cpl = array.new<float>()
+var float lastPH = na
+var float lastPL = na
+if not na(ph)
+    lastPH := ph
+    cph.push(ph)
+    if cph.size() > 10
+        cph.shift()
+if not na(pl)
+    lastPL := pl
+    cpl.push(pl)
+    if cpl.size() > 10
+        cpl.shift()
+
+bullGap = bar_index >= 2 and low > high[2] and low - high[2] >= entGap * atrC
+bearGap = bar_index >= 2 and high < low[2] and low[2] - high >= entGap * atrC
+
+// ---- helpers for the ETF state machine
+isSweep(float p, bool lg) => not na(p) and (lg ? low < p and close > p : high > p and close < p)
+
+anySweep(bool lg) =>
+    hit = false
+    fixed = lg ? array.from(pdL, pwL, asiaLoV) : array.from(pdH, pwH, asiaHiV)
+    for p in fixed
+        if isSweep(p, lg)
+            hit := true
+    for o in liqs
+        if o.live and o.hi != lg and isSweep(o.p, lg)
+            hit := true
+    arr = lg ? cpl : cph
+    for p in arr
+        if isSweep(p, lg)
+            hit := true
+    hit
+
+closer(float best, float p, float x, bool up) =>
+    ok = not na(p) and (up ? p > x : p < x)
+    ok and (na(best) or math.abs(p - x) < math.abs(best - x)) ? p : best
+
+nearestPool(float x, bool up) =>
+    float best = na
+    fixed = up ? array.from(pdH, pwH, asiaHiV) : array.from(pdL, pwL, asiaLoV)
+    for p in fixed
+        best := closer(best, p, x, up)
+    for o in liqs
+        if o.live and o.hi == up
+            best := closer(best, o.p, x, up)
+    arr = up ? cph : cpl
+    for p in arr
+        best := closer(best, p, x, up)
+    best
+
+finalPool(float x, bool up) =>
+    float best = na
+    fixed = up ? array.from(pdH, pwH, h1, dlHi) : array.from(pdL, pwL, l1, dlLo)
+    for p in fixed
+        best := closer(best, p, x, up)
+    for s in srs
+        if s.res == up
+            best := closer(best, up ? s.bot : s.top, x, up)
+    best
+
+zoneOpp(Eng e, bool up, float a, float b) =>
+    hit = false
+    for zn in e.zs
+        if zn.fresh and zn.bull != up
+            edge = up ? zn.bot : zn.top
+            if up ? edge > a and edge < b : edge < a and edge > b
+                hit := true
+    hit
+
+srOpp(bool up, float a, float b) =>
+    hit = false
+    for s in srs
+        if s.res == up
+            edge = up ? s.bot : s.top
+            if up ? edge > a and edge < b : edge < a and edge > b
+                hit := true
+    hit
+
+insideOpp(Eng e, bool bull, float tp, float bt) =>
+    hit = false
+    for zn in e.zs
+        if zn.fresh and zn.bull != bull and zn.top >= bt and zn.bot <= tp
+            hit := true
+    hit
+
+findPoi(Eng e, int d, float eqv) =>
+    found = false
+    float tp = na
+    float bt = na
+    string nm = ""
+    for zn in e.zs
+        if not found and zn.fresh and zn.cause and zn.bull == (d == 1)
+            locOk = d == 1 ? zn.top <= eqv : zn.bot >= eqv
+            touch = low <= zn.top and high >= zn.bot
+            if locOk and touch
+                found := true
+                tp := zn.top
+                bt := zn.bot
+                nm := e.tag + " " + kindName(zn.kind)
+    [found, tp, bt, nm]
+
+// one label per setup that moves to the latest step; setups that do not trade turn grey (today only) or go
+stepTo(label lb, string txt, color col, bool below) =>
+    if not na(lb)
+        label.set_xy(lb, bar_index, below ? low : high)
+        label.set_text(lb, txt)
+        label.set_color(lb, color.new(col, 10))
+        label.set_style(lb, below ? label.style_label_up : label.style_label_down)
+    0
+
+var missLbs = array.new<label>()
+
+missEnd(label lb, string txt) =>
+    if not na(lb)
+        if missMode == "Never"
+            label.delete(lb)
+            0
+        else
+            label.set_text(lb, txt)
+            label.set_color(lb, color.new(cRg, 55))
+            missLbs.push(lb)
+            0
+    0
+
+atfOk(int d) => d != 0 and eB.trend == d and (eA.trend == d or eB.lastEv == 2 * d or eB.lastEv == 3 * d)
+
+// ---- the state machine (closed chart bars only): 0 idle, 1 at POI, 2 swept, 3 order working, 4 in trade
+var int st5 = 0
+var int sd = 0
+var float poiTop = na
+var float poiBot = na
+var string poiName = ""
+var float swX = na
+var int swBar = na
+var int nSweeps = 0
+var float mssLvl = na
+var float legBody = 0.0
+var float legX = na
+var float fTop = na
+var float fBot = na
+var bool chochShown = false
+var float ent = na
+var float stp = na
+var float rsk = na
+var float tg1 = na
+var float tg2 = na
+var int mssBar = na
+var bool t1Hit = false
+var int tradesToday = 0
+var int lossesToday = 0
+var string lastNote = "-"
+var string lastResult = "-"
+var string lastFails = ""
+var bool vShape = false
+var bool dblSweep = false
+var box bxRisk = na
+var box bxRew = na
+var line lnT2 = na
+var line lnEnt = na
+var label setupLb = na
+var string setupTxt = ""
+orderNow = false
+fillNow = false
+exitNow = false
+var float exitR = na
+
+if barstate.isconfirmed and etfOn
+    if newDay
+        tradesToday := 0
+        lossesToday := 0
+        for lb in missLbs
+            label.delete(lb)
+        missLbs.clear()
+        if st5 > 0 and st5 < 4
+            st5 := 0
+            lastNote := "New day: setup cleared"
+            strategy.cancel("TDF")
+            if not na(setupLb)
+                label.delete(setupLb)
+            setupLb := na
+    lg = sd == 1
+    if st5 == 0
+        if bias != 0 and tradesToday < maxTrades and lossesToday < maxLosses
+            [fA, tpA, btA, nmA] = findPoi(eA, bias, eq)
+            [fB, tpB, btB, nmB] = findPoi(eB, bias, eq)
+            okPoiB = fB and not insideOpp(eA, bias == 1, tpB, btB)
+            if fA or okPoiB
+                st5 := 1
+                sd := bias
+                poiTop := fA ? tpA : tpB
+                poiBot := fA ? btA : btB
+                poiName := fA ? nmA : nmB
+                lastNote := "At POI: " + poiName
+                setupTxt := (bias == 1 ? "LONG" : "SHORT") + " setup: POI " + poiName
+                setupLb := showTrades ? label.new(bar_index, bias == 1 ? low : high, setupTxt, style = bias == 1 ? label.style_label_up : label.style_label_down,
+                     color = color.new(cRg, 10), textcolor = color.white, size = size.small) : na
+        0
+    else if st5 == 1
+        failed = lg ? close < poiBot : close > poiTop
+        if failed
+            st5 := 0
+            lastNote := "POI failed (closed through)"
+            missEnd(setupLb, setupTxt + " → POI failed")
+            setupLb := na
+            0
+        else if inWin and (lg ? low <= poiTop + 0.5 * atrC : high >= poiBot - 0.5 * atrC) and anySweep(lg)
+            st5 := 2
+            swX := lg ? low : high
+            swBar := bar_index
+            nSweeps := 1
+            mssLvl := lg ? (not na(lastPH) and lastPH > close ? lastPH : hh10) : (not na(lastPL) and lastPL < close ? lastPL : ll10)
+            legBody := 0.0
+            legX := lg ? high : low
+            fTop := na
+            fBot := na
+            chochShown := false
+            lastNote := "Sweep at the POI"
+            setupTxt := setupTxt + " → Sweep"
+            stepTo(setupLb, setupTxt, lg ? cSsl : cBsl, lg)
+            0
+        0
+    else if st5 == 2
+        deeper = lg ? low < swX : high > swX
+        failed = lg ? close < poiBot : close > poiTop
+        if failed or not inWin
+            st5 := 0
+            lastNote := failed ? "POI failed after the sweep" : "Session window closed before the MSS"
+            missEnd(setupLb, setupTxt + (failed ? " → POI failed" : " → window closed"))
+            setupLb := na
+            0
+        else if deeper
+            if anySweep(lg)
+                nSweeps += 1
+            swX := lg ? low : high
+            swBar := bar_index
+            mssLvl := lg ? (not na(lastPH) and lastPH > close ? lastPH : hh10) : (not na(lastPL) and lastPL < close ? lastPL : ll10)
+            legBody := 0.0
+            legX := lg ? high : low
+            fTop := na
+            fBot := na
+            0
+        else
+            legBody := math.max(legBody, lg ? close - open : open - close)
+            legX := lg ? math.max(legX, high) : math.min(legX, low)
+            if lg and bullGap
+                fTop := low
+                fBot := high[2]
+            if not lg and bearGap
+                fTop := low[2]
+                fBot := high
+            broke = lg ? close > mssLvl : close < mssLvl
+            if broke
+                if legBody >= dispMult * atrC and not na(fTop)
+                    // ---- MSS: build the order and run the checklist
+                    mssBar := bar_index
+                    ent := fillAt == "Near edge" ? (lg ? fTop : fBot) : fillAt == "50% of the gap" ? (fTop + fBot) / 2 : (lg ? fBot : fTop)
+                    stp := lg ? swX - stopBuf * atrC : swX + stopBuf * atrC
+                    minRisk = minStopPct / 100 * ent
+                    if math.abs(ent - stp) < minRisk
+                        stp := lg ? ent - minRisk : ent + minRisk
+                    rsk := math.abs(ent - stp)
+                    tg1 := nearestPool(lg ? math.max(legX, ent) : math.min(legX, ent), lg)
+                    tg2 := na(tg1) ? na : finalPool(tg1, lg)
+                    rr = na(tg1) or rsk <= 0 ? 0.0 : math.abs(tg1 - ent) / rsk
+                    opp = not na(tg1) and (zoneOpp(eA, lg, ent, tg1) or zoneOpp(eB, lg, ent, tg1) or srOpp(lg, ent, tg1))
+                    c1 = bias == sd
+                    c2 = lg ? ent < eq : ent > eq
+                    c3 = ctrl == sd
+                    c4 = atfOk(sd)
+                    c6 = rr >= minRR and not opp
+                    c11 = tradesToday < maxTrades and lossesToday < maxLosses
+                    fails = (c1 ? "" : " 1") + (c2 ? "" : " 2") + (c3 ? "" : " 3") + (c4 ? "" : " 4") + (c6 ? "" : " 6") + (c11 ? "" : " 11")
+                    lastFails := fails
+                    vShape := mssBar - swBar <= vBars
+                    dblSweep := nSweeps >= 2
+                    grade = (vShape ? 1 : 0) + (dblSweep ? 1 : 0)
+                    if fails == ""
+                        st5 := 3
+                        orderNow := true
+                        lastNote := (lg ? "Buy" : "Sell") + " limit " + str.tostring(ent, format.mintick) + " working, confluence " + str.tostring(grade) + "/2"
+                        setupTxt := setupTxt + " → MSS: " + (lg ? "BUY" : "SELL") + " LIMIT"
+                        stepTo(setupLb, setupTxt, lg ? cUp : cDn, lg)
+                        if showTrades
+                            bxRisk := box.new(bar_index, lg ? ent : stp, bar_index + 1, lg ? stp : ent, bgcolor = color.new(cDn, 85), border_color = color.new(cDn, 50))
+                            bxRew := box.new(bar_index, lg ? nz(tg1, ent) : ent, bar_index + 1, lg ? ent : nz(tg1, ent), bgcolor = color.new(cUp, 85), border_color = color.new(cUp, 50),
+                                 text = "T1 " + str.tostring(rr, "#.0") + "R", text_size = size.tiny, text_color = cUp, text_halign = text.align_right, text_valign = lg ? text.align_top : text.align_bottom)
+                            lnT2 := na(tg2) ? na : line.new(bar_index, tg2, bar_index + 1, tg2, color = color.new(cUp, 20), style = line.style_dashed)
+                            lnEnt := line.new(bar_index, ent, bar_index + 1, ent, color = color.new(color.black, 20), width = 2)
+                        qty = math.max(1, math.floor(strategy.equity * riskPct / 100 / rsk))
+                        strategy.entry("TDF", lg ? strategy.long : strategy.short, qty = qty, limit = ent, comment = poiName)
+                        strategy.exit("T1", "TDF", qty_percent = 50, limit = tg1, stop = stp, comment_profit = "T1", comment_loss = "Stop")
+                        strategy.exit("T2", "TDF", limit = tg2, stop = stp, comment_profit = "Final target", comment_loss = "Stop")
+                        alert('{"action":"' + (lg ? "buy_limit" : "sell_limit") + '","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(ent) +
+                             ',"stop":' + str.tostring(stp) + ',"t1":' + str.tostring(tg1) + ',"t2":' + str.tostring(nz(tg2, tg1)) +
+                             ',"expiry_bars":' + str.tostring(expiryBars) + ',"confluence":' + str.tostring(grade) + '}', alert.freq_once_per_bar_close)
+                        0
+                    else
+                        st5 := 0
+                        lastNote := "MSS, no trade: check" + fails + " failed"
+                        missEnd(setupLb, setupTxt + " → MSS, no trade (check" + fails + ")")
+                        setupLb := na
+                        0
+                else if not chochShown
+                    chochShown := true
+                    setupTxt := setupTxt + " → CHoCH"
+                    stepTo(setupLb, setupTxt, cRg, lg)
+                    0
+            0
+        0
+    else if st5 == 3
+        filled = bar_index > mssBar and (lg ? low <= ent : high >= ent)
+        if filled
+            st5 := 4
+            fillNow := true
+            tradesToday += 1
+            t1Hit := false
+            lastNote := "In trade from " + str.tostring(ent, format.mintick)
+            setupTxt := setupTxt + " → Filled"
+            stepTo(setupLb, setupTxt, lg ? cUp : cDn, lg)
+            if showTrades
+                label.new(bar_index, ent, lg ? "▲ Filled" : "▼ Filled", style = label.style_label_left, color = color.new(color.black, 0),
+                     textcolor = color.white, size = size.tiny)
+                if not na(lnEnt)
+                    line.set_x2(lnEnt, bar_index)
+            if lg ? low <= stp : high >= stp
+                st5 := 0
+                exitNow := true
+                exitR := -1.0
+                lossesToday += 1
+                lastNote := "Stopped out on the fill bar"
+                lastResult := "-1R (stopped on the fill bar)"
+                setupTxt := setupTxt + " → -1R"
+                stepTo(setupLb, setupTxt, cDn, not lg)
+                setupLb := na
+            0
+        else if bar_index - mssBar >= expiryBars or (lg ? low < swX : high > swX) or not inWin
+            st5 := 0
+            lastNote := "Order cancelled (not filled in time, new extreme or window closed)"
+            strategy.cancel("TDF")
+            missEnd(setupLb, setupTxt + " → not filled")
+            setupLb := na
+            if not na(bxRisk)
+                box.delete(bxRisk)
+                box.delete(bxRew)
+            if not na(lnT2)
+                line.delete(lnT2)
+            if not na(lnEnt)
+                line.delete(lnEnt)
+            0
+        0
+    else if st5 == 4
+        r1 = na(tg1) ? 0.0 : math.abs(tg1 - ent) / rsk
+        if lg ? low <= stp : high >= stp
+            exitR := t1Hit ? 0.5 * r1 : -1.0
+            0
+        else
+            if not t1Hit and not na(tg1) and (lg ? high >= tg1 : low <= tg1)
+                t1Hit := true
+                stp := ent
+                strategy.exit("T2", "TDF", limit = tg2, stop = ent, comment_profit = "Final target", comment_loss = "Breakeven")
+                setupTxt := setupTxt + " → T1 (half off, stop to entry)"
+                stepTo(setupLb, setupTxt, cUp, not lg)
+            if not na(tg2) and (lg ? high >= tg2 : low <= tg2)
+                exitR := 0.5 * r1 + 0.5 * math.abs(tg2 - ent) / rsk
+                0
+            else if nyMin >= eodMin
+                rc = (lg ? close - ent : ent - close) / rsk
+                exitR := t1Hit ? 0.5 * r1 + 0.5 * rc : rc
+                0
+            0
+        if not na(exitR)
+            st5 := 0
+            exitNow := true
+            if exitR < 0
+                lossesToday += 1
+            lastNote := "Trade closed"
+            strategy.close("TDF", comment = nyMin >= eodMin ? "End of day" : "Closed")
+            lastResult := (lg ? "Long " : "Short ") + str.tostring(exitR, "#.##") + "R"
+            setupTxt := setupTxt + " → " + str.tostring(exitR, "#.##") + "R"
+            stepTo(setupLb, setupTxt, exitR >= 0 ? cUp : cDn, not lg)
+            setupLb := na
+        0
+    if st5 == 3 or st5 == 4
+        if not na(bxRisk)
+            box.set_right(bxRisk, bar_index)
+            box.set_right(bxRew, bar_index)
+        if not na(lnT2)
+            line.set_x2(lnT2, bar_index)
+        if st5 == 3 and not na(lnEnt)
+            line.set_x2(lnEnt, bar_index)
+if barstate.isconfirmed and not exitNow
+    exitR := na
+
+// ---- liquidity bookkeeping after the sweep checks (taken pools are spent)
+if liqs.size() > 0
+    for q = liqs.size() - 1 to 0
+        o = liqs.get(q)
+        if o.hi ? high > o.p : low < o.p
+            if not na(o.ln)
+                line.delete(o.ln)
+            if not na(o.lb)
+                label.delete(o.lb)
+            liqs.remove(q)
+            0
+        else if not na(o.ln)
+            line.set_x2(o.ln, time)
+            0
+if cph.size() > 0
+    for q = cph.size() - 1 to 0
+        if high > cph.get(q)
+            cph.remove(q)
+if cpl.size() > 0
+    for q = cpl.size() - 1 to 0
+        if low < cpl.get(q)
+            cpl.remove(q)
+
+// ================================================================ chart FVGs (kept from Structure + FVG)
+plot(showEma ? ta.ema(close, emaLen) : na, "EMA", color = color.new(#e8590c, 0), linewidth = 2)
+
+type Gap
+    box bx
+    bool bull
+    bool live
+    float top
+    float bot
+    float top0
+    float bot0
+    int born
+
+var gaps = array.new<Gap>()
+
+paintGap(Gap g) =>
+    col = g.bull ? cUp : cDn
+    box.set_bgcolor(g.bx, color.new(col, g.live ? 85 : 94))
+    box.set_border_color(g.bx, color.new(col, g.live ? 60 : 85))
+    0
+
+finish(Gap g) =>
+    g.live := false
+    if histMode == "None"
+        box.delete(g.bx)
+        0
+    else
+        paintGap(g)
+        0
+    0
+
+addGap(bool bull, float t, float b) =>
+    skip = false
+    if mergeB2B and gaps.size() > 0
+        for k = gaps.size() - 1 to 0
+            o = gaps.get(k)
+            if o.bull == bull and o.live and o.born >= bar_index - 3
+                if o.top0 - o.bot0 >= t - b
+                    skip := true
+                    0
+                else
+                    box.delete(o.bx)
+                    o.live := false
+                    0
+    if not skip
+        g = Gap.new(box.new(bar_index - 2, t, bar_index, b), bull, true, t, b, t, b, bar_index - 1)
+        paintGap(g)
+        gaps.push(g)
+    0
+
+solid(float hgt) => hgt >= minPct / 100 * close and (minAtr <= 0 or hgt >= minAtr * atrC)
+allowBull = fvgFilter == "All FVGs" or bias == 1
+allowBear = fvgFilter == "All FVGs" or bias == -1
+newBullFvg = showFvg and allowBull and bar_index >= 2 and low > high[2] and solid(low - high[2])
+newBearFvg = showFvg and allowBear and bar_index >= 2 and high < low[2] and solid(low[2] - high)
+if newBullFvg
+    addGap(true, low, high[2])
+if newBearFvg
+    addGap(false, low[2], high)
+
+if histMode == "Today only (faded)" and timeframe.isintraday and timeframe.change("D") and gaps.size() > 0
+    for k = gaps.size() - 1 to 0
+        o = gaps.get(k)
+        if not o.live
+            box.delete(o.bx)
+            gaps.remove(k)
+
+if gaps.size() > 0
+    for k = gaps.size() - 1 to 0
+        g = gaps.get(k)
+        if not g.live
+            continue
+        if bar_index - g.born > maxExt
+            finish(g)
+            continue
+        if bar_index > g.born + 1
+            filled = false
+            if g.bull
+                if shrink and low < g.top
+                    g.top := math.max(low, g.bot)
+                    box.set_top(g.bx, g.top)
+                filled := fillMode == "Fully filled" ? low <= g.bot0 : low < g.top0
+                0
+            else
+                if shrink and high > g.bot
+                    g.bot := math.min(high, g.top)
+                    box.set_bottom(g.bx, g.bot)
+                filled := fillMode == "Fully filled" ? high >= g.top0 : high > g.bot0
+                0
+            if filled
+                finish(g)
+                continue
+        box.set_right(g.bx, bar_index)
+    while gaps.size() > maxGaps
+        old = gaps.shift()
+        box.delete(old.bx)
+
+// ================================================================ edge drawings, table, Data Window outputs, alerts
+// ---- edge drawings (Execution and Analysis views): only the levels that matter now, at the right edge
+var edgeBx = array.new<box>()
+var edgeLn = array.new<line>()
+var edgeLb = array.new<label>()
+
+edgeClear() =>
+    for bxi in edgeBx
+        box.delete(bxi)
+    for lni in edgeLn
+        line.delete(lni)
+    for lbi in edgeLb
+        label.delete(lbi)
+    edgeBx.clear()
+    edgeLn.clear()
+    edgeLb.clear()
+    0
+
+edgeZone(float tp, float bt, string txt, color col, int tr) =>
+    if not na(tp) and not na(bt)
+        edgeBx.push(box.new(bar_index - edgeBack, tp, bar_index + 10, bt, bgcolor = color.new(col, tr), border_color = color.new(col, 40),
+             text = txt, text_size = size.tiny, text_color = col, text_halign = text.align_right, text_valign = text.align_center))
+    0
+
+edgeLevel(float p, string txt, color col, string sty) =>
+    if not na(p)
+        edgeLn.push(line.new(bar_index - edgeBack, p, bar_index + 10, p, color = color.new(col, 10), style = sty))
+        edgeLb.push(label.new(bar_index + 10, p, txt, style = label.style_label_left, color = color.new(color.white, 100), textcolor = col, size = size.tiny))
+    0
+
+nearZone(Eng e, bool bull) =>
+    float tp = na
+    float bt = na
+    string nm = ""
+    for zn in e.zs
+        if zn.fresh and zn.bull == bull
+            ok = bull ? zn.bot < close : zn.top > close
+            better = bull ? (na(tp) or zn.top > tp) : (na(bt) or zn.bot < bt)
+            if ok and better
+                tp := zn.top
+                bt := zn.bot
+                nm := e.tag + " " + kindName(zn.kind)
+    [tp, bt, nm]
+
+nearSR(bool above) =>
+    float tp = na
+    float bt = na
+    bool rs = false
+    for s in srs
+        ok = above ? s.top >= close : s.bot < close
+        better = above ? (na(bt) or s.bot < bt) : (na(tp) or s.top > tp)
+        if ok and better
+            tp := s.top
+            bt := s.bot
+            rs := s.res
+    [tp, bt, rs]
+
+liqNear(bool up) =>
+    ps = array.new<float>()
+    es = array.new<bool>()
+    for o in liqs
+        if o.live and o.hi == up and (up ? o.p > close : o.p < close)
+            ps.push(o.p)
+            es.push(o.isEq)
+    [ps, es]
+
+if barstate.islast and not vDir
+    edgeClear()
+    if showDRIn and not na(eq)
+        edgeLevel(dlHi, "Daily range high", cRg, line.style_dotted)
+        edgeLevel(eq, "Daily EQ 50%: premium above, discount below", cRg, line.style_dashed)
+        edgeLevel(dlLo, "Daily range low", cRg, line.style_dotted)
+    if showSRIn
+        [sTa, sBa, sRa] = nearSR(true)
+        [sTb, sBb, sRb] = nearSR(false)
+        edgeZone(sTa, sBa, sRa ? "Daily resistance" : "Daily support", cSR, 88)
+        if na(sTa) or sTb != sTa or sBb != sBa
+            edgeZone(sTb, sBb, sRb ? "Daily resistance" : "Daily support", cSR, 88)
+    if vExec and useAtf
+        [dTa, dBa, dNa] = nearZone(eA, true)
+        [dTb, dBb, dNb] = nearZone(eB, true)
+        [uTa, uBa, uNa] = nearZone(eA, false)
+        [uTb, uBb, uNb] = nearZone(eB, false)
+        useDa = not na(dTa) and (na(dTb) or dTa >= dTb)
+        useUa = not na(uBa) and (na(uBb) or uBa <= uBb)
+        edgeZone(useDa ? dTa : dTb, useDa ? dBa : dBb, "Demand POI: " + (useDa ? dNa : dNb), cDem, 82)
+        edgeZone(useUa ? uTa : uTb, useUa ? uBa : uBb, "Supply POI: " + (useUa ? uNa : uNb), cSup, 82)
+        if st5 >= 1 and st5 <= 3
+            edgeZone(poiTop, poiBot, "Active POI: " + poiName, sd == 1 ? cDem : cSup, 70)
+    if vExec and showLiqIn
+        [bp, be] = liqNear(true)
+        [sp, se] = liqNear(false)
+        if bp.size() > 0
+            bi = bp.sort_indices(order.ascending)
+            for q = 0 to math.min(3, bp.size()) - 1
+                k = bi.get(q)
+                edgeLevel(bp.get(k), be.get(k) ? "EQH (buy-side)" : "Buy-side liquidity", cBsl, line.style_dotted)
+        if sp.size() > 0
+            si = sp.sort_indices(order.descending)
+            for q = 0 to math.min(3, sp.size()) - 1
+                k = si.get(q)
+                edgeLevel(sp.get(k), se.get(k) ? "EQL (sell-side)" : "Sell-side liquidity", cSsl, line.style_dotted)
+
+// ---- table: a 6-row summary; the full 11-row checklist while a setup is active
+tick(bool ok) => ok ? "✓" : "✗"
+dirName(int d) => d == 1 ? "LONG" : d == -1 ? "SHORT" : "NONE"
+ctrlName(int d) => d == 1 ? "Demand" : d == -1 ? "Supply" : "Undecided"
+trName(int d) => d == 1 ? "up" : d == -1 ? "down" : "-"
+wkName(float s) => s == 1 ? "up" : s == -1 ? "down" : s == 2 ? "range" : "-"
+stepName(int s) => s == 0 ? "Waiting for a POI" : s == 1 ? "At POI, waiting for a sweep" : s == 2 ? "Swept, waiting for the MSS" : s == 3 ? "Limit order working" : "In trade"
+viewName() => vExec ? "Execution" : vAna ? "Analysis" : "Direction"
+
+tblPos = tblPosIn == "Top right" ? position.top_right : tblPosIn == "Bottom right" ? position.bottom_right : tblPosIn == "Top left" ? position.top_left : position.bottom_left
+var table tb = table.new(tblPos, 3, 18, bgcolor = color.new(color.white, 8), border_width = 1, border_color = color.new(color.gray, 75))
+
+row(int r, string a, string b, string c, color col) =>
+    table.cell(tb, 0, r, a, text_size = size.small, text_halign = text.align_left)
+    table.cell(tb, 1, r, b, text_size = size.small, text_halign = text.align_left)
+    table.cell(tb, 2, r, c, text_size = size.small, text_color = col, text_halign = text.align_left)
+    0
+
+if showTable and barstate.islast
+    table.clear(tb, 0, 0, 2, 17)
+    d = bias
+    cOk = color.new(cUp, 0)
+    cNo = color.new(cDn, 0)
+    cWait = color.new(cRg, 0)
+    r2 = d == 1 ? close < eq : d == -1 ? close > eq : false
+    r3 = d != 0 and ctrl == d
+    r4 = atfOk(d)
+    r11 = tradesToday < maxTrades and lossesToday < maxLosses
+    full = tblMode == "Always" or (tblMode == "Auto" and st5 >= 1)
+    row(0, viewName(), "Bias: " + dirName(d) + " (daily " + str.lower(stName(z.st)) + ", weekly " + wkName(wkSt) + ")", "", d == 1 ? cOk : d == -1 ? cNo : cWait)
+    row(1, "", "In control (" + eA.tag + "): " + ctrlName(ctrl), "", ctrl == 1 ? cOk : ctrl == -1 ? cNo : cWait)
+    row(2, "", "ATF trend: " + eA.tag + " " + trName(eA.trend) + ", " + eB.tag + " " + trName(eB.trend), "", cWait)
+    if etfOn
+        row(3, "", "Setup: " + stepName(st5) + (st5 >= 1 ? " (" + poiName + ")" : ""), "", st5 >= 3 ? cOk : cWait)
+        row(4, "", "Last: " + lastNote, "", cWait)
+        row(5, "", "Last trade: " + lastResult + " · today " + str.tostring(tradesToday) + "/" + str.tostring(maxTrades) + " trades", "", cWait)
+    else
+        row(3, "", vAna ? "Analysis view: ATF structure, POIs and liquidity. Trades run on a 5-minute chart." : "Direction view: daily structure, S/R zones, dealing range.", "", cWait)
+    if full and etfOn
+        row(6, "#", "Checklist (" + dirName(d) + ")", "", cWait)
+        row(7, "1", "HTF: daily direction", tick(d != 0), d != 0 ? cOk : cNo)
+        row(8, "2", "HTF: price in " + (d == -1 ? "premium" : "discount"), tick(r2), r2 ? cOk : cNo)
+        row(9, "3", "HTF: in control = " + ctrlName(ctrl), tick(r3), r3 ? cOk : cNo)
+        row(10, "4", "ATF: trend aligned", tick(r4), r4 ? cOk : cNo)
+        row(11, "5", "ATF: fresh POI reached", st5 >= 1 ? "✓" : "…", st5 >= 1 ? cOk : cWait)
+        row(12, "6", "ATF: Target 1 >= " + str.tostring(minRR) + "R, no opposing zone", st5 >= 3 ? "✓" : "…", st5 >= 3 ? cOk : cWait)
+        row(13, "7", "ETF: session window", tick(inWin), inWin ? cOk : cNo)
+        row(14, "8", "ETF: sweep at the POI", st5 >= 2 ? "✓" : "…", st5 >= 2 ? cOk : cWait)
+        row(15, "9-10", "ETF: MSS with displacement and entry FVG", st5 >= 3 ? "✓" : "…", st5 >= 3 ? cOk : cWait)
+        row(16, "11", "Risk: losses " + str.tostring(lossesToday) + "/" + str.tostring(maxLosses), tick(r11), r11 ? cOk : cNo)
+        row(17, "+", "V-shape " + tick(vShape) + ", double sweep " + tick(dblSweep) + "; news and volume profile by eye", "", cWait)
+
+plot(bias, "Bias (1 long, -1 short, 0 none)", display = display.data_window)
+plot(z.st, "Daily structure (1 up, -1 down, 2 range)", display = display.data_window)
+plot(ctrl, "In control (1 demand, -1 supply)", display = display.data_window)
+plot(eA.trend, "ATF A trend", display = display.data_window)
+plot(eB.trend, "ATF B trend", display = display.data_window)
+plot(eq, "Dealing range 50%", display = display.data_window)
+plot(st5, "Setup state (0 idle, 1 POI, 2 swept, 3 order, 4 in trade)", display = display.data_window)
+plot(st5 >= 3 ? ent : na, "Entry", display = display.data_window)
+plot(st5 >= 3 ? stp : na, "Stop", display = display.data_window)
+plot(st5 >= 3 ? tg1 : na, "Target 1", display = display.data_window)
+plot(st5 >= 3 ? tg2 : na, "Final target", display = display.data_window)
+plot(exitR, "Closed trade result (R)", display = display.data_window)
+plot(vMode, "View (1 execution, 2 analysis, 3 direction)", display = display.data_window)
+
+
+// safety: nothing is held overnight
+if strategy.position_size != 0 and nyMin >= eodMin and timeframe.isintraday
+    strategy.close_all(comment = "End of day")
